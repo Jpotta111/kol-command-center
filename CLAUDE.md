@@ -1,5 +1,9 @@
 # KOL Command Center — Claude Code Context
 
+## Working Directory
+Canonical repo: `~/Projects/kol-command-center`
+The old `~/Desktop/virta-ma-tools` folder is deprecated — do not work from it.
+
 ## What This Is
 General-purpose KOL intelligence platform for Medical Affairs teams.
 Built on public data only. No proprietary data is ever committed to this repo.
