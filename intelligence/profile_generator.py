@@ -32,7 +32,7 @@ DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 GRAPH_PATH = DATA_DIR / "kol_graph.json"
 PROFILES_PATH = DATA_DIR / "kol_profiles.json"
 
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 RATE_LIMIT_DELAY = 2  # seconds between Gemini calls
 
 # Module-level client — initialized once
@@ -150,16 +150,18 @@ def _generate_profile_impl(kol: dict) -> dict:
             contents=prompt,
             config=types.GenerateContentConfig(
                 temperature=0.3,
-                max_output_tokens=2048,
+                max_output_tokens=4096,
+                response_mime_type="application/json",
             ),
         )
         raw_text = response.text.strip()
 
         # Strip markdown code fences if present
         if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[1]
-            if raw_text.endswith("```"):
-                raw_text = raw_text[:-3].strip()
+            lines = raw_text.split("\n")
+            # Remove first line (```json) and last line (```)
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            raw_text = "\n".join(lines).strip()
 
         profile = json.loads(raw_text)
         profile["_meta"] = {
