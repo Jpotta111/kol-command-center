@@ -1,0 +1,36 @@
+{
+  "therapeutic_area": "T2D_metabolic_nutrition",
+  "openalex_concepts": [
+    {"id": "C2779323", "label": "Type 2 diabetes", "weight": 1.0},
+    {"id": "C2986049", "label": "Obesity", "weight": 0.9},
+    {"id": "C2778348", "label": "Metabolic syndrome", "weight": 0.9},
+    {"id": "C126322002", "label": "Insulin resistance", "weight": 0.8},
+    {"id": "C41008148", "label": "Dietary supplement", "weight": 0.6}
+  ],
+  "openalex_topics": [
+    {"id": "T10401", "label": "Diabetes Treatment and Management", "weight": 1.0},
+    {"id": "T10528", "label": "Adipokines, Inflammation, and Metabolic Diseases", "weight": 0.9},
+    {"id": "T10027", "label": "Diabetes, Cardiovascular Risks, and Lipoproteins", "weight": 0.8},
+    {"id": "T12267", "label": "Diet and metabolism studies", "weight": 0.8}
+  ],
+  "nutrition_keywords": [
+    "low carbohydrate", "low-carbohydrate", "ketogenic",
+    "carbohydrate restriction", "dietary intervention",
+    "nutritional ketosis", "very low calorie", "caloric restriction"
+  ],
+  "filters": {
+    "min_publications": 5,
+    "min_citations": 50,
+    "years_active_recent": 3
+  },
+  "ops_weights": {
+    "scientific_influence": 20,
+    "clinical_alignment": 20,
+    "reach_visibility": 20,
+    "nutrition_openness": 20,
+    "strategic_value": 20
+  },
+  "tier_thresholds": {"A": 80, "B": 60, "C": 40},
+  "target_author_count": 500,
+  "polite_email": "your_email@gmail.com"
+}

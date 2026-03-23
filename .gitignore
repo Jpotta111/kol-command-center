@@ -1,0 +1,32 @@
+# API keys and secrets
+.env
+*.key
+*.pem
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node
+node_modules/
+package-lock.json
+dist/
+
+# Python (if tools expand later)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+*.log
+
+# Pipeline output — real KOL data stays local only
+data/
