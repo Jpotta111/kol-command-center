@@ -1,25 +1,21 @@
 /**
- * Vercel serverless function: CSV enrichment via OpenAlex.
+ * Vercel serverless function: CSV enrichment via OpenAlex + PubMed.
  *
  * POST /api/enrich  (multipart/form-data with a "file" field)
  *
- * For each row, searches OpenAlex by name + institution, computes a
- * simplified OPS score (no graph centrality), and returns an enriched
- * CSV as a download. No data is stored server-side.
+ * OPS scoring redesigned for Medical Affairs priorities:
+ *   1. Institutional Credibility (0-20)
+ *   2. Clinical Relevance via PubMed (0-20)
+ *   3. Collaboration Signal (0-20)
+ *   4. Nutrition/Lifestyle Openness (0-20)
+ *   5. Strategic Reach (0-20)
  */
 
 import { Readable } from "stream";
 
-// ── Config (mirrors config/ops_config.json) ────────────────────────────
+// ── Config ─────────────────────────────────────────────────────────────
 
 const CONFIG = {
-  openalex_concepts: [
-    { label: "Type 2 diabetes", weight: 1.0 },
-    { label: "Obesity", weight: 0.9 },
-    { label: "Metabolic syndrome", weight: 0.9 },
-    { label: "Insulin resistance", weight: 0.8 },
-    { label: "Dietary supplement", weight: 0.6 },
-  ],
   nutrition_keywords: [
     "low carbohydrate", "low-carbohydrate", "ketogenic",
     "carbohydrate restriction", "dietary intervention",
@@ -29,54 +25,181 @@ const CONFIG = {
 };
 
 const OPENALEX_BASE = "https://api.openalex.org";
+const PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
-// ── OPS scoring (simplified — no graph centrality) ─────────────────────
+// ── Institutional tiers ────────────────────────────────────────────────
 
-function clamp(v, lo = 0, hi = 20) {
-  return Math.max(lo, Math.min(hi, v));
+const TOP_AMC_KEYWORDS = [
+  "johns hopkins", "mayo clinic", "harvard medical", "harvard t.h. chan",
+  "brigham and women", "massachusetts general", "ucsf",
+  "stanford medicine", "stanford university", "yale medicine",
+  "yale university", "columbia university", "penn medicine",
+  "university of pennsylvania", "vanderbilt", "duke university",
+  "duke health", "cleveland clinic", "mount sinai", "nyu langone",
+  "university of michigan", "michigan medicine", "university of chicago",
+  "northwestern university", "northwestern medicine", "emory university",
+  "university of pittsburgh", "upmc", "university of washington",
+  "washington university in st. louis", "baylor college", "uc san diego",
+  "scripps research", "scripps institution", "md anderson",
+  "memorial sloan", "dana-farber", "cedars-sinai",
+  "university of virginia", "unc chapel hill", "university of north carolina",
+  "oregon health", "university of colorado", "tufts university",
+  "tufts medical", "boston university", "ut southwestern",
+  "university of florida", "university of wisconsin", "weill cornell",
+  "albert einstein college", "university of california",
+  "karolinska", "oxford university", "university of cambridge",
+];
+
+const MAJOR_SYSTEM_KEYWORDS = [
+  "university hospital", "university medical", "medical school",
+  "school of medicine", "college of medicine", "medical college",
+  "teaching hospital", "academic medical", "health science",
+  "national institutes of health", "nih", "cdc",
+  "centers for disease", "veterans affairs", "va medical",
+];
+
+function isTopAMC(institution) {
+  if (!institution) return false;
+  const lower = institution.toLowerCase();
+  return TOP_AMC_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
-function scoreScientificInfluence(author) {
-  // Solo mode: h-index log estimate, no graph centrality
-  const h = author.h_index || 0;
-  const hPct = Math.min(1.0, Math.log1p(h) / Math.log1p(100));
-  // pr_norm=0.5, ev_norm=0.5 (no graph)
-  const raw = 0.4 * 0.5 + 0.3 * 0.5 + 0.3 * hPct;
-  return clamp(Math.round(raw * 20 * 100) / 100);
+function isMajorSystem(institution) {
+  if (!institution) return false;
+  const lower = institution.toLowerCase();
+  return MAJOR_SYSTEM_KEYWORDS.some((kw) => lower.includes(kw));
 }
 
-function scoreClinicalAlignment(author) {
-  const targets = CONFIG.openalex_concepts;
-  if (!targets.length) return 10;
+// ── OPS Dimension 1: Institutional Credibility (0-20) ──────────────────
+
+function scoreInstitutionalCredibility(author) {
+  const inst = author.institution || "";
+  if (isTopAMC(inst)) {
+    // Scale within 16-20 based on h-index as tiebreaker
+    const h = author.h_index || 0;
+    const bonus = Math.min(4, Math.floor(h / 25));
+    return clamp(16 + bonus);
+  }
+  if (isMajorSystem(inst)) {
+    return clamp(13);
+  }
+  if (inst) {
+    // Some institution listed — regional/community
+    return clamp(7);
+  }
+  return clamp(3); // Unknown / private practice
+}
+
+// ── OPS Dimension 2: Clinical Relevance via PubMed (0-20) ──────────────
+
+const PUBMED_MESH_TERMS = [
+  "Diabetes Mellitus, Type 2",
+  "Obesity",
+  "Metabolic Syndrome",
+  "Insulin Resistance",
+  "Diet, Carbohydrate-Restricted",
+  "Weight Loss",
+];
+
+async function scoreClinicalRelevance(author) {
+  const name = author.display_name || "";
+  if (!name) return 10;
+
+  try {
+    // Search PubMed for author's total publications
+    const totalParams = new URLSearchParams({
+      db: "pubmed",
+      term: `${name}[Author]`,
+      rettype: "count",
+      retmode: "json",
+    });
+    const totalResp = await fetch(`${PUBMED_BASE}/esearch.fcgi?${totalParams}`);
+    if (!totalResp.ok) throw new Error("PubMed total search failed");
+    const totalData = await totalResp.json();
+    const totalCount = parseInt(totalData?.esearchresult?.count || "0", 10);
+
+    if (totalCount === 0) return fallbackClinicalRelevance(author);
+
+    // Search for publications with relevant MeSH terms
+    const meshQuery = PUBMED_MESH_TERMS.map((t) => `"${t}"[MeSH]`).join(" OR ");
+    const relevantParams = new URLSearchParams({
+      db: "pubmed",
+      term: `${name}[Author] AND (${meshQuery})`,
+      rettype: "count",
+      retmode: "json",
+    });
+    const relevantResp = await fetch(`${PUBMED_BASE}/esearch.fcgi?${relevantParams}`);
+    if (!relevantResp.ok) throw new Error("PubMed relevant search failed");
+    const relevantData = await relevantResp.json();
+    const relevantCount = parseInt(relevantData?.esearchresult?.count || "0", 10);
+
+    const ratio = relevantCount / Math.min(totalCount, 500); // cap denominator
+    return clamp(Math.round(ratio * 20 * 100) / 100);
+  } catch {
+    return fallbackClinicalRelevance(author);
+  }
+}
+
+function fallbackClinicalRelevance(author) {
+  // Fallback: OpenAlex concept matching
+  const targets = [
+    { label: "type 2 diabetes", weight: 1.0 },
+    { label: "obesity", weight: 0.9 },
+    { label: "metabolic syndrome", weight: 0.9 },
+    { label: "insulin resistance", weight: 0.8 },
+    { label: "dietary supplement", weight: 0.6 },
+  ];
 
   const conceptText = (author.concepts || [])
     .map((c) => (typeof c === "object" ? c.display_name || "" : String(c)))
     .join(" ")
     .toLowerCase();
 
-  let matchedWeight = 0;
-  let totalWeight = 0;
+  let matchedW = 0, totalW = 0;
   for (const tc of targets) {
-    totalWeight += tc.weight;
-    if (tc.label.toLowerCase() && conceptText.includes(tc.label.toLowerCase())) {
-      matchedWeight += tc.weight;
-    }
+    totalW += tc.weight;
+    if (conceptText.includes(tc.label)) matchedW += tc.weight;
   }
-  if (totalWeight === 0) return 10;
-  return clamp(Math.round((matchedWeight / totalWeight) * 20 * 100) / 100);
+  if (totalW === 0) return 10;
+  return clamp(Math.round((matchedW / totalW) * 20 * 100) / 100);
 }
 
-function scoreReachVisibility(author) {
-  const citations = author.citation_count || 0;
-  let citeScore = 0;
-  if (citations > 0) {
-    citeScore = Math.min(14, (Math.log10(citations) / 5.7) * 14);
+// ── OPS Dimension 3: Collaboration Signal (0-20) ──────────────────────
+
+function scoreCollaborationSignal(author, contact) {
+  // Check "Virta Paper CoAuthor" from CSV
+  const coauthorFlag = (
+    contact["Virta Paper CoAuthor"] ||
+    contact["virta_paper_coauthor"] ||
+    contact["Virta Paper Coauthor"] ||
+    ""
+  ).toLowerCase();
+
+  if (coauthorFlag === "true" || coauthorFlag === "yes" || coauthorFlag === "1") {
+    return { score: 20, reason: "Virta Paper CoAuthor" };
   }
-  // No co-author institutions in enrich mode
-  return clamp(Math.round((citeScore) * 100) / 100);
+
+  const h = author.h_index || 0;
+  const inst = author.institution || "";
+
+  if (h > 30 && isTopAMC(inst)) {
+    return { score: 14, reason: "Top AMC + high h-index" };
+  }
+
+  // Pharma payments signal = industry engagement = collaborative tendency
+  // We don't have pharma data in browser enrichment, so check if we
+  // have any signals from the CSV or use neutral
+  const pharmaFlag = contact["Open Payments"] || contact["open_payments"] || "";
+  if (pharmaFlag && pharmaFlag !== "0" && pharmaFlag.toLowerCase() !== "false") {
+    return { score: 10, reason: "Industry engaged (Open Payments)" };
+  }
+
+  return { score: 8, reason: "No signals detected" };
 }
 
-function scoreNutritionOpenness(author) {
+// ── OPS Dimension 4: Nutrition/Lifestyle Openness (0-20) ───────────────
+
+function scoreNutritionOpenness(author, collaborationScore) {
   const keywords = CONFIG.nutrition_keywords;
   if (!keywords.length) return 10;
 
@@ -90,16 +213,59 @@ function scoreNutritionOpenness(author) {
   for (const kw of keywords) {
     if (searchable.includes(kw.toLowerCase())) matches++;
   }
-  return clamp(10 + matches * 2);
+
+  let score = clamp(10 + matches * 2);
+
+  // Co-authors are implicitly open enough — floor at 12
+  if (collaborationScore === 20 && score < 12) {
+    score = 12;
+  }
+
+  return score;
 }
 
-function computeOPSScore(author) {
-  const sci = scoreScientificInfluence(author);
-  const align = scoreClinicalAlignment(author);
-  const reach = scoreReachVisibility(author);
-  const nutr = scoreNutritionOpenness(author);
-  const strat = 10; // No pharma data in browser enrichment
-  const composite = Math.round((sci + align + reach + nutr + strat) * 100) / 100;
+// ── OPS Dimension 5: Strategic Reach (0-20) ────────────────────────────
+
+function scoreStrategicReach(author) {
+  let score = 0;
+  const citations = author.citation_count || 0;
+  const h = author.h_index || 0;
+  const inst = author.institution || "";
+
+  // Citation tiers
+  if (citations > 10000) score += 8;
+  else if (citations > 1000) score += 5;
+  else if (citations > 100) score += 3;
+
+  // h-index tiers
+  if (h > 50) score += 4;
+  else if (h >= 20) score += 2;
+
+  // Top AMC bonus (intentional overlap with Dim 1)
+  if (isTopAMC(inst)) score += 4;
+
+  // Pharma entanglement not available in browser enrichment;
+  // handled at pipeline level. Default neutral here.
+
+  return clamp(Math.round(score * 100) / 100);
+}
+
+// ── Composite scorer ───────────────────────────────────────────────────
+
+function clamp(v, lo = 0, hi = 20) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+async function computeOPSScore(author, contact) {
+  const instCred = scoreInstitutionalCredibility(author);
+  const clinRel = await scoreClinicalRelevance(author);
+  const collab = scoreCollaborationSignal(author, contact);
+  const nutrOpen = scoreNutritionOpenness(author, collab.score);
+  const stratReach = scoreStrategicReach(author);
+
+  const composite = Math.round(
+    (instCred + clinRel + collab.score + nutrOpen + stratReach) * 100
+  ) / 100;
 
   const t = CONFIG.tier_thresholds;
   let tier = "D";
@@ -110,11 +276,12 @@ function computeOPSScore(author) {
   return {
     ops_score: composite,
     tier,
-    scientific_influence_score: sci,
-    clinical_alignment_score: align,
-    reach_visibility_score: reach,
-    nutrition_openness_score: nutr,
-    strategic_value_score: strat,
+    institutional_credibility_score: instCred,
+    clinical_relevance_score: clinRel,
+    collaboration_signal_score: collab.score,
+    collaboration_reason: collab.reason,
+    nutrition_openness_score: nutrOpen,
+    strategic_reach_score: stratReach,
   };
 }
 
@@ -147,14 +314,12 @@ async function searchAuthor(name, institution, email) {
     const candTokens = new Set(candName.split(/\s+/));
     if (!candTokens.size) continue;
 
-    // Token overlap
     let overlap = 0;
     for (const t of queryTokens) {
       if (candTokens.has(t)) overlap++;
     }
     const nameScore = overlap / Math.max(queryTokens.size, candTokens.size);
 
-    // Institution boost
     let instBoost = 0;
     if (queryInst) {
       for (const inst of raw.last_known_institutions || []) {
@@ -219,7 +384,7 @@ async function fetchRecentTitles(authorId, email) {
   }
 }
 
-// ── CSV parsing (minimal, no dependencies) ─────────────────────────────
+// ── CSV parsing ────────────────────────────────────────────────────────
 
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).filter((l) => l.trim());
@@ -286,7 +451,6 @@ async function parseMultipart(req) {
   const boundary = boundaryMatch[1];
   const chunks = [];
 
-  // Handle both Node.js IncomingMessage and Web Request
   if (typeof req.arrayBuffer === "function") {
     const buf = Buffer.from(await req.arrayBuffer());
     chunks.push(buf);
@@ -304,7 +468,6 @@ async function parseMultipart(req) {
       const headerEnd = part.indexOf("\r\n\r\n");
       if (headerEnd === -1) continue;
       let content = part.slice(headerEnd + 4);
-      // Remove trailing \r\n-- if present
       if (content.endsWith("--\r\n")) content = content.slice(0, -4);
       else if (content.endsWith("\r\n")) content = content.slice(0, -2);
       return content;
@@ -317,7 +480,6 @@ async function parseMultipart(req) {
 // ── Main handler ───────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
-  // CORS headers
   const origin = req.headers.origin || req.headers.get?.("origin") || "*";
   const corsHeaders = {
     "Access-Control-Allow-Origin": origin,
@@ -342,7 +504,6 @@ export default async function handler(req, res) {
       || process.env.OPENALEX_EMAIL
       || "";
 
-    // Parse the uploaded CSV
     const csvText = await parseMultipart(req);
     const contacts = parseCSV(csvText);
 
@@ -352,13 +513,15 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Send progress as SSE-like JSON stream
     const outputColumns = [
-      "hs_object_id", "openalex_match_status", "ops_score", "kol_tier",
-      "scientific_influence_score", "clinical_alignment_score",
-      "pharma_entanglement_score", "openalex_id", "orcid",
-      "top_paper_title", "top_paper_doi", "h_index", "citation_count",
-      "institution", "nutrition_signal_keywords", "last_profiled_date",
+      "hs_object_id", "openalex_match_status", "existing_kol_tier",
+      "ops_score", "kol_tier",
+      "institutional_credibility_score", "clinical_relevance_score",
+      "collaboration_signal_score", "collaboration_reason",
+      "nutrition_openness_score", "strategic_reach_score",
+      "openalex_id", "orcid", "top_paper_title", "top_paper_doi",
+      "h_index", "citation_count", "institution",
+      "nutrition_signal_keywords", "last_profiled_date",
       "nutrition_stance", "nutrition_stance_source",
     ];
 
@@ -367,7 +530,6 @@ export default async function handler(req, res) {
     let notFound = 0;
 
     for (const contact of contacts) {
-      // Extract name from common column variants
       let name = contact.display_name || contact.Name || contact.name || "";
       if (!name) {
         const first = contact.firstname || contact["First Name"] || contact.first_name || "";
@@ -379,36 +541,38 @@ export default async function handler(req, res) {
         contact.institution || contact.Institution ||
         contact.company || contact.Company || "";
       const hsId = contact.hs_object_id || contact["Record ID"] || "";
+      const existingTier = contact["MA_OPS Tier"] || contact["ma_ops_tier"] || "";
 
       if (!name) {
-        enrichedRows.push(emptyRow(hsId, "skip_no_name"));
+        enrichedRows.push(emptyRow(hsId, "skip_no_name", existingTier));
         notFound++;
         continue;
       }
 
-      // Search OpenAlex
       const author = await searchAuthor(name, institution, email);
 
       if (!author) {
-        enrichedRows.push(emptyRow(hsId, "not_found"));
+        enrichedRows.push(emptyRow(hsId, "not_found", existingTier));
         notFound++;
         continue;
       }
 
-      // Fetch recent work titles for nutrition scoring
       author.recent_work_titles = await fetchRecentTitles(author.openalex_id, email);
 
-      // Compute OPS score
-      const score = computeOPSScore(author);
+      const score = await computeOPSScore(author, contact);
 
       enrichedRows.push({
         hs_object_id: hsId,
         openalex_match_status: "matched",
+        existing_kol_tier: existingTier,
         ops_score: score.ops_score,
         kol_tier: score.tier,
-        scientific_influence_score: score.scientific_influence_score,
-        clinical_alignment_score: score.clinical_alignment_score,
-        pharma_entanglement_score: score.strategic_value_score,
+        institutional_credibility_score: score.institutional_credibility_score,
+        clinical_relevance_score: score.clinical_relevance_score,
+        collaboration_signal_score: score.collaboration_signal_score,
+        collaboration_reason: score.collaboration_reason,
+        nutrition_openness_score: score.nutrition_openness_score,
+        strategic_reach_score: score.strategic_reach_score,
         openalex_id: author.openalex_id,
         orcid: author.orcid || "",
         top_paper_title: (author.recent_work_titles || [])[0] || "",
@@ -423,11 +587,9 @@ export default async function handler(req, res) {
       });
       matched++;
 
-      // Rate limit: 100ms between OpenAlex calls
       await new Promise((r) => setTimeout(r, 100));
     }
 
-    // Build CSV response
     const csvHeader = outputColumns.join(",");
     const csvRows = enrichedRows.map((row) =>
       outputColumns.map((col) => escapeCSVField(row[col])).join(",")
@@ -452,13 +614,16 @@ export default async function handler(req, res) {
   }
 }
 
-function emptyRow(hsId, status) {
+function emptyRow(hsId, status, existingTier) {
   return {
     hs_object_id: hsId,
     openalex_match_status: status,
+    existing_kol_tier: existingTier || "",
     ops_score: "", kol_tier: "",
-    scientific_influence_score: "", clinical_alignment_score: "",
-    pharma_entanglement_score: "", openalex_id: "", orcid: "",
+    institutional_credibility_score: "", clinical_relevance_score: "",
+    collaboration_signal_score: "", collaboration_reason: "",
+    nutrition_openness_score: "", strategic_reach_score: "",
+    openalex_id: "", orcid: "",
     top_paper_title: "", top_paper_doi: "", h_index: "",
     citation_count: "", institution: "", nutrition_signal_keywords: "",
     last_profiled_date: "", nutrition_stance: "", nutrition_stance_source: "",
