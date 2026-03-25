@@ -23,7 +23,7 @@ from urllib.parse import urlencode
 import networkx as nx
 import requests
 
-from pipeline.openalex_client import fetch_authors, load_config
+from pipeline.openalex_client import fetch_authors, load_config, search_author_by_name
 from pipeline.open_payments_client import lookup_payments
 from pipeline.ops_scorer import compute_ops_score, precompute_centrality
 
@@ -352,6 +352,166 @@ def run_pipeline(max_authors: int | None = None, skip_payments: bool = False):
     print(f"  {csv_path}")
 
 
+def run_enrich_csv(csv_filename: str, skip_payments: bool = False):
+    """
+    Enrich a HubSpot contacts CSV with OpenAlex data and OPS scores.
+
+    Reads from data/<csv_filename>, searches OpenAlex per row,
+    scores matches, and exports to data/kol_export_enriched.csv.
+    """
+    config = load_config()
+    email = config.get("polite_email", "")
+
+    input_path = DATA_DIR / csv_filename
+    if not input_path.exists():
+        print(f"ERROR: CSV not found at {input_path}")
+        raise SystemExit(1)
+
+    # Read input CSV
+    with open(input_path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        contacts = list(reader)
+
+    print(f"Enriching {len(contacts)} contacts from {input_path.name}")
+    print()
+
+    # Track results
+    matched_authors = []
+    matched_scores = []
+    matched_pharma = []
+    enriched_rows = []
+    stats = {"matched": 0, "not_found": 0, "ambiguous": 0}
+
+    for i, contact in enumerate(contacts, 1):
+        # Extract name — try common CSV column names
+        name = (
+            contact.get("display_name")
+            or contact.get("Name")
+            or contact.get("name")
+            or ""
+        )
+        # Try first + last name columns
+        if not name:
+            first = contact.get("firstname") or contact.get("First Name") or contact.get("first_name") or ""
+            last = contact.get("lastname") or contact.get("Last Name") or contact.get("last_name") or ""
+            name = f"{first} {last}".strip()
+
+        institution = (
+            contact.get("institution")
+            or contact.get("Institution")
+            or contact.get("company")
+            or contact.get("Company")
+            or ""
+        )
+        hs_object_id = contact.get("hs_object_id") or contact.get("Record ID") or ""
+
+        if not name:
+            print(f"  [{i}/{len(contacts)}] SKIP: no name found in row")
+            enriched_rows.append(_empty_enriched_row(hs_object_id, "skip_no_name"))
+            stats["not_found"] += 1
+            continue
+
+        print(f"  [{i}/{len(contacts)}] {name} ({institution or 'no institution'})...", end=" ")
+
+        # Search OpenAlex
+        author = search_author_by_name(name, institution=institution, email=email)
+
+        if author is None:
+            print("NOT FOUND")
+            enriched_rows.append(_empty_enriched_row(hs_object_id, "not_found"))
+            stats["not_found"] += 1
+            time.sleep(0.1)
+            continue
+
+        # Pharma lookup
+        if skip_payments:
+            pharma = {"data_available": False}
+        else:
+            first, last = _split_name(author["display_name"])
+            pharma = lookup_payments(first_name=first, last_name=last, years=[2024])
+
+        # Score — minimal graph (single node, no centrality)
+        score = compute_ops_score(
+            author=author,
+            pharma_data=pharma,
+            graph=None,
+            config=config,
+            population_h_indices=[author.get("h_index", 0)],
+            centrality_map={},
+        )
+
+        matched_authors.append(author)
+        matched_scores.append(score)
+        matched_pharma.append(pharma)
+
+        enriched_rows.append({
+            "hs_object_id": hs_object_id,
+            "openalex_match_status": "matched",
+            "ops_score": score["ops_score"],
+            "kol_tier": score["tier"],
+            "scientific_influence_score": score["scientific_influence_score"],
+            "clinical_alignment_score": score["clinical_alignment_score"],
+            "pharma_entanglement_score": score.get("strategic_value_score", ""),
+            "openalex_id": author.get("openalex_id", ""),
+            "orcid": author.get("orcid") or "",
+            "top_paper_title": (author.get("recent_work_titles") or [""])[0],
+            "top_paper_doi": "",
+            "h_index": author.get("h_index", ""),
+            "citation_count": author.get("citation_count", ""),
+            "institution": author.get("institution") or "",
+            "nutrition_signal_keywords": "",
+            "last_profiled_date": date.today().isoformat(),
+            "nutrition_stance": "",
+            "nutrition_stance_source": "",
+        })
+
+        print(f"MATCHED → OPS {score['ops_score']:.1f} (Tier {score['tier']})")
+        stats["matched"] += 1
+        time.sleep(0.1)
+
+    # Export enriched CSV
+    output_path = DATA_DIR / "kol_export_enriched.csv"
+    output_columns = ["hs_object_id", "openalex_match_status"] + HUBSPOT_COLUMNS[1:]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=output_columns)
+        writer.writeheader()
+        for row in enriched_rows:
+            writer.writerow(row)
+
+    print(f"\n{'='*50}")
+    print(f"Enrichment complete:")
+    print(f"  Matched:   {stats['matched']}")
+    print(f"  Not found: {stats['not_found']}")
+    print(f"  Ambiguous: {stats['ambiguous']}")
+    print(f"\nOutput: {output_path}")
+
+
+def _empty_enriched_row(hs_object_id: str, status: str) -> dict:
+    """Return an empty enriched row with only the match status set."""
+    return {
+        "hs_object_id": hs_object_id,
+        "openalex_match_status": status,
+        "ops_score": "",
+        "kol_tier": "",
+        "scientific_influence_score": "",
+        "clinical_alignment_score": "",
+        "pharma_entanglement_score": "",
+        "openalex_id": "",
+        "orcid": "",
+        "top_paper_title": "",
+        "top_paper_doi": "",
+        "h_index": "",
+        "citation_count": "",
+        "institution": "",
+        "nutrition_signal_keywords": "",
+        "last_profiled_date": "",
+        "nutrition_stance": "",
+        "nutrition_stance_source": "",
+    }
+
+
 if __name__ == "__main__":
     import argparse
 
@@ -365,6 +525,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip-payments", action="store_true",
         help="Skip CMS Open Payments lookups for faster test runs",
+    )
+    parser.add_argument(
+        "--enrich-csv", type=str, default=None,
+        metavar="FILENAME",
+        help="Enrich a contacts CSV from data/ directory (e.g., contacts.csv)",
     )
     args = parser.parse_args()
 
@@ -381,8 +546,14 @@ if __name__ == "__main__":
         print(f"  This repo may be an incomplete clone. Check git status.")
         raise SystemExit(1)
     print(f"  Data:    {DATA_DIR}")
-    print(f"  Authors: {args.max_authors or 'config default'}")
-    print(f"  Payments: {'skip' if args.skip_payments else 'enabled'}")
-    print()
 
-    run_pipeline(max_authors=args.max_authors, skip_payments=args.skip_payments)
+    if args.enrich_csv:
+        print(f"  Mode:    enrich-csv ({args.enrich_csv})")
+        print(f"  Payments: {'skip' if args.skip_payments else 'enabled'}")
+        print()
+        run_enrich_csv(args.enrich_csv, skip_payments=args.skip_payments)
+    else:
+        print(f"  Authors: {args.max_authors or 'config default'}")
+        print(f"  Payments: {'skip' if args.skip_payments else 'enabled'}")
+        print()
+        run_pipeline(max_authors=args.max_authors, skip_payments=args.skip_payments)

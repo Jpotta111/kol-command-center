@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import NetworkGraph from "./components/NetworkGraph";
 import KOLTable from "./components/KOLTable";
 import CSVImportExport from "./components/CSVImportExport";
+import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
 const TABS = [
@@ -10,11 +11,31 @@ const TABS = [
   { id: "csv", label: "CSV Import/Export" },
 ];
 
+function GearIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("graph");
   const [graphData, setGraphData] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [selectedKOL, setSelectedKOL] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   useEffect(() => {
     // Try loading real pipeline data, fall back to sample
@@ -61,11 +82,37 @@ export default function App() {
             </button>
           ))}
         </div>
-        <div className="ml-auto text-xs text-white/60">
-          {graphData.nodes.length} KOLs &middot;{" "}
-          {graphData.edges.length} connections
+        <div className="ml-auto flex items-center gap-4">
+          <span className="text-xs text-white/60">
+            {graphData.nodes.length} KOLs &middot;{" "}
+            {graphData.edges.length} connections
+          </span>
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="text-white/70 hover:text-white transition-colors p-1 rounded hover:bg-white/10"
+            title="Settings"
+          >
+            <GearIcon />
+          </button>
         </div>
       </nav>
+
+      {/* Auth notice */}
+      {!localStorage.getItem("kol_gemini_key") && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-800 flex items-center gap-2">
+          <span>
+            Add your Gemini API key in{" "}
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="underline font-medium"
+            >
+              Settings
+            </button>{" "}
+            to enable AI profile generation. Authentication is not yet
+            configured — this app is currently open.
+          </span>
+        </div>
+      )}
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
@@ -91,6 +138,8 @@ export default function App() {
           <CSVImportExport nodes={graphData.nodes} />
         )}
       </div>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }
