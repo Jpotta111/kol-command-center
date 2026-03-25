@@ -113,6 +113,9 @@ MESH_SECONDARY = [
     "Hypertension", "C-Reactive Protein", "Cardiovascular Diseases",
     "Metabolic Syndrome", "Telemedicine", "Pancreatic Neoplasms",
     "Mental Disorders", "Depression", "Cognitive Dysfunction", "Fatty Liver",
+    "Economics, Medical", "Cost-Benefit Analysis", "Health Care Costs",
+    "Cost Savings", "Quality-Adjusted Life Years",
+    "Outcome Assessment, Health Care",
 ]
 
 TEXT_WORDS = [
@@ -123,6 +126,11 @@ TEXT_WORDS = [
     "metabolic-associated steatohepatitis", "NAFLD", "NASH",
     "pancreatic cancer", "metabolic psychiatry",
     "cognitive function", "brain health",
+    "health economics", "cost effectiveness", "cost-effectiveness",
+    "claims analysis", "claims data",
+    "real world evidence", "real-world evidence",
+    "budget impact", "healthcare utilization",
+    "value-based care", "QALY", "payer",
 ]
 
 import re as _re
