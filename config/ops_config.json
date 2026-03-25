@@ -38,7 +38,13 @@
       {"term": "Mental Disorders", "weight": 0.7},
       {"term": "Depression", "weight": 0.7},
       {"term": "Cognitive Dysfunction", "weight": 0.7},
-      {"term": "Fatty Liver", "weight": 0.7}
+      {"term": "Fatty Liver", "weight": 0.7},
+      {"term": "Economics, Medical", "weight": 0.7},
+      {"term": "Cost-Benefit Analysis", "weight": 0.7},
+      {"term": "Health Care Costs", "weight": 0.7},
+      {"term": "Cost Savings", "weight": 0.7},
+      {"term": "Quality-Adjusted Life Years", "weight": 0.7},
+      {"term": "Outcome Assessment, Health Care", "weight": 0.7}
     ],
     "text_words": [
       {"term": "nutritional ketosis", "weight": 0.5},
@@ -58,7 +64,19 @@
       {"term": "pancreatic cancer", "weight": 0.5},
       {"term": "metabolic psychiatry", "weight": 0.5},
       {"term": "cognitive function", "weight": 0.5},
-      {"term": "brain health", "weight": 0.5}
+      {"term": "brain health", "weight": 0.5},
+      {"term": "health economics", "weight": 0.5},
+      {"term": "cost effectiveness", "weight": 0.5},
+      {"term": "cost-effectiveness", "weight": 0.5},
+      {"term": "claims analysis", "weight": 0.5},
+      {"term": "claims data", "weight": 0.5},
+      {"term": "real world evidence", "weight": 0.5},
+      {"term": "real-world evidence", "weight": 0.5},
+      {"term": "budget impact", "weight": 0.5},
+      {"term": "healthcare utilization", "weight": 0.5},
+      {"term": "value-based care", "weight": 0.5},
+      {"term": "QALY", "weight": 0.5},
+      {"term": "payer", "weight": 0.5}
     ]
   },
   "nutrition_keywords": [
