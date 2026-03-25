@@ -97,53 +97,91 @@ def score_institutional_credibility(author: dict) -> float:
 
 
 # ── Dimension 2: Clinical Relevance via PubMed (0-20) ──────────────────
+# Weighted multi-tier: primary MeSH (1.0), secondary MeSH (0.7), text words (0.5)
 
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
-PUBMED_MESH_TERMS = [
-    "Diabetes Mellitus, Type 2",
-    "Obesity",
-    "Metabolic Syndrome",
-    "Insulin Resistance",
-    "Diet, Carbohydrate-Restricted",
-    "Weight Loss",
+
+MESH_PRIMARY = [
+    {"term": "Diabetes Mellitus, Type 2", "weight": 1.0},
+    {"term": "Diet, Ketogenic", "weight": 1.0},
+    {"term": "Diet, Carbohydrate-Restricted", "weight": 1.0},
+    {"term": "Insulin Resistance", "weight": 1.0},
+    {"term": "Glycated Hemoglobin", "weight": 1.0},
+    {"term": "Hypoglycemic Agents", "weight": 1.0},
 ]
+
+MESH_SECONDARY = [
+    {"term": "Obesity", "weight": 0.7},
+    {"term": "Weight Loss", "weight": 0.7},
+    {"term": "Dyslipidemias", "weight": 0.7},
+    {"term": "Triglycerides", "weight": 0.7},
+    {"term": "Hypertension", "weight": 0.7},
+    {"term": "C-Reactive Protein", "weight": 0.7},
+    {"term": "Cardiovascular Diseases", "weight": 0.7},
+    {"term": "Metabolic Syndrome", "weight": 0.7},
+    {"term": "Telemedicine", "weight": 0.7},
+]
+
+TEXT_WORDS = [
+    {"term": "nutritional ketosis", "weight": 0.5},
+    {"term": "carbohydrate restriction", "weight": 0.5},
+    {"term": "low carbohydrate", "weight": 0.5},
+    {"term": "continuous care", "weight": 0.5},
+    {"term": "diabetes reversal", "weight": 0.5},
+    {"term": "diabetes remission", "weight": 0.5},
+]
+
+ALL_MESH = MESH_PRIMARY + MESH_SECONDARY
+
+
+def _pubmed_count(query: str) -> int:
+    """Run a PubMed count query."""
+    params = urlencode({
+        "db": "pubmed", "term": query,
+        "rettype": "count", "retmode": "json",
+    })
+    resp = requests.get(f"{PUBMED_BASE}/esearch.fcgi?{params}", timeout=10)
+    resp.raise_for_status()
+    return int(resp.json().get("esearchresult", {}).get("count", 0))
 
 
 def score_clinical_relevance(author: dict, config: dict) -> float:
-    """Query PubMed for clinical relevance; fall back to OpenAlex concepts."""
+    """Weighted PubMed MeSH scoring; falls back to OpenAlex concepts."""
+    import time
+
     name = author.get("display_name", "")
     if not name:
         return 10.0
 
     try:
-        # Total publications
-        total_params = urlencode({
-            "db": "pubmed",
-            "term": f"{name}[Author]",
-            "rettype": "count",
-            "retmode": "json",
-        })
-        total_resp = requests.get(f"{PUBMED_BASE}/esearch.fcgi?{total_params}", timeout=10)
-        total_resp.raise_for_status()
-        total_count = int(total_resp.json().get("esearchresult", {}).get("count", 0))
-
+        total_count = _pubmed_count(f"{name}[Author]")
         if total_count == 0:
             return _fallback_clinical_relevance(author, config)
 
-        # Relevant publications (MeSH terms)
-        mesh_query = " OR ".join(f'"{t}"[MeSH]' for t in PUBMED_MESH_TERMS)
-        rel_params = urlencode({
-            "db": "pubmed",
-            "term": f"{name}[Author] AND ({mesh_query})",
-            "rettype": "count",
-            "retmode": "json",
-        })
-        rel_resp = requests.get(f"{PUBMED_BASE}/esearch.fcgi?{rel_params}", timeout=10)
-        rel_resp.raise_for_status()
-        rel_count = int(rel_resp.json().get("esearchresult", {}).get("count", 0))
+        capped_total = min(total_count, 500)
 
-        ratio = rel_count / min(total_count, 500)
-        return _clamp(round(ratio * 20, 2))
+        # Primary MeSH: hit ratio scaled to 10 points max
+        primary_query = " OR ".join(f'"{t["term"]}"[MeSH]' for t in MESH_PRIMARY)
+        primary_count = _pubmed_count(f"{name}[Author] AND ({primary_query})")
+        primary_ratio = primary_count / capped_total
+        time.sleep(0.4)
+
+        # Secondary MeSH: hit ratio scaled to 6 points max
+        secondary_query = " OR ".join(f'"{t["term"]}"[MeSH]' for t in MESH_SECONDARY)
+        secondary_count = _pubmed_count(f"{name}[Author] AND ({secondary_query})")
+        secondary_ratio = secondary_count / capped_total
+        time.sleep(0.4)
+
+        # Text words (TIAB): hit ratio scaled to 4 points max
+        text_query = " OR ".join(f'"{t["term"]}"[TIAB]' for t in TEXT_WORDS)
+        text_count = _pubmed_count(f"{name}[Author] AND ({text_query})")
+        text_ratio = text_count / capped_total
+
+        # Primary up to 8 pts, secondary up to 4, text words up to 8 = 20 max
+        # Text words weighted heavily — catch Virta-specific language
+        # (nutritional ketosis, carbohydrate restriction, diabetes remission)
+        score = (primary_ratio * 8) + (secondary_ratio * 4) + (text_ratio * 8)
+        return _clamp(round(score, 2))
 
     except Exception as e:
         logger.warning("PubMed lookup failed for %s: %s", name, e)
@@ -151,10 +189,11 @@ def score_clinical_relevance(author: dict, config: dict) -> float:
 
 
 def _fallback_clinical_relevance(author: dict, config: dict) -> float:
-    """OpenAlex concept matching fallback."""
-    target_concepts = config.get("openalex_concepts", [])
-    if not target_concepts:
-        return 10.0
+    """OpenAlex concept matching fallback using same term set."""
+    targets = [
+        {"label": t["term"].lower(), "weight": t["weight"]}
+        for t in ALL_MESH
+    ]
 
     author_concept_text = " ".join(
         c.get("display_name", "") if isinstance(c, dict) else str(c)
@@ -163,12 +202,10 @@ def _fallback_clinical_relevance(author: dict, config: dict) -> float:
 
     matched_weight = 0.0
     total_weight = 0.0
-    for tc in target_concepts:
-        w = tc.get("weight", 1.0)
-        total_weight += w
-        label = tc.get("label", "").lower()
-        if label and label in author_concept_text:
-            matched_weight += w
+    for tc in targets:
+        total_weight += tc["weight"]
+        if tc["label"] in author_concept_text:
+            matched_weight += tc["weight"]
 
     if total_weight == 0:
         return 10.0

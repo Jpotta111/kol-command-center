@@ -91,63 +91,91 @@ function scoreInstitutionalCredibility(author) {
 }
 
 // ── OPS Dimension 2: Clinical Relevance via PubMed (0-20) ──────────────
+// Weighted multi-tier: primary MeSH (1.0), secondary MeSH (0.7), text words (0.5)
 
-const PUBMED_MESH_TERMS = [
-  "Diabetes Mellitus, Type 2",
-  "Obesity",
-  "Metabolic Syndrome",
-  "Insulin Resistance",
-  "Diet, Carbohydrate-Restricted",
-  "Weight Loss",
+const MESH_PRIMARY = [
+  { term: "Diabetes Mellitus, Type 2", weight: 1.0 },
+  { term: "Diet, Ketogenic", weight: 1.0 },
+  { term: "Diet, Carbohydrate-Restricted", weight: 1.0 },
+  { term: "Insulin Resistance", weight: 1.0 },
+  { term: "Glycated Hemoglobin", weight: 1.0 },
+  { term: "Hypoglycemic Agents", weight: 1.0 },
 ];
+
+const MESH_SECONDARY = [
+  { term: "Obesity", weight: 0.7 },
+  { term: "Weight Loss", weight: 0.7 },
+  { term: "Dyslipidemias", weight: 0.7 },
+  { term: "Triglycerides", weight: 0.7 },
+  { term: "Hypertension", weight: 0.7 },
+  { term: "C-Reactive Protein", weight: 0.7 },
+  { term: "Cardiovascular Diseases", weight: 0.7 },
+  { term: "Metabolic Syndrome", weight: 0.7 },
+  { term: "Telemedicine", weight: 0.7 },
+];
+
+const TEXT_WORDS = [
+  { term: "nutritional ketosis", weight: 0.5 },
+  { term: "carbohydrate restriction", weight: 0.5 },
+  { term: "low carbohydrate", weight: 0.5 },
+  { term: "continuous care", weight: 0.5 },
+  { term: "diabetes reversal", weight: 0.5 },
+  { term: "diabetes remission", weight: 0.5 },
+];
+
+async function pubmedCount(query) {
+  const params = new URLSearchParams({
+    db: "pubmed", term: query, rettype: "count", retmode: "json",
+  });
+  const resp = await fetch(`${PUBMED_BASE}/esearch.fcgi?${params}`);
+  if (!resp.ok) throw new Error(`PubMed ${resp.status}`);
+  const data = await resp.json();
+  return parseInt(data?.esearchresult?.count || "0", 10);
+}
 
 async function scoreClinicalRelevance(author) {
   const name = author.display_name || "";
   if (!name) return 10;
 
   try {
-    // Search PubMed for author's total publications
-    const totalParams = new URLSearchParams({
-      db: "pubmed",
-      term: `${name}[Author]`,
-      rettype: "count",
-      retmode: "json",
-    });
-    const totalResp = await fetch(`${PUBMED_BASE}/esearch.fcgi?${totalParams}`);
-    if (!totalResp.ok) throw new Error("PubMed total search failed");
-    const totalData = await totalResp.json();
-    const totalCount = parseInt(totalData?.esearchresult?.count || "0", 10);
-
+    const totalCount = await pubmedCount(`${name}[Author]`);
     if (totalCount === 0) return fallbackClinicalRelevance(author);
 
-    // Search for publications with relevant MeSH terms
-    const meshQuery = PUBMED_MESH_TERMS.map((t) => `"${t}"[MeSH]`).join(" OR ");
-    const relevantParams = new URLSearchParams({
-      db: "pubmed",
-      term: `${name}[Author] AND (${meshQuery})`,
-      rettype: "count",
-      retmode: "json",
-    });
-    const relevantResp = await fetch(`${PUBMED_BASE}/esearch.fcgi?${relevantParams}`);
-    if (!relevantResp.ok) throw new Error("PubMed relevant search failed");
-    const relevantData = await relevantResp.json();
-    const relevantCount = parseInt(relevantData?.esearchresult?.count || "0", 10);
+    const cappedTotal = Math.min(totalCount, 500);
 
-    const ratio = relevantCount / Math.min(totalCount, 500); // cap denominator
-    return clamp(Math.round(ratio * 20 * 100) / 100);
+    // Primary MeSH: hit ratio * weight 1.0, scaled to 10 points max
+    const primaryQuery = MESH_PRIMARY.map((t) => `"${t.term}"[MeSH]`).join(" OR ");
+    const primaryCount = await pubmedCount(`${name}[Author] AND (${primaryQuery})`);
+    const primaryRatio = primaryCount / cappedTotal;
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Secondary MeSH: hit ratio * weight 0.7, scaled to 6 points max
+    const secondaryQuery = MESH_SECONDARY.map((t) => `"${t.term}"[MeSH]`).join(" OR ");
+    const secondaryCount = await pubmedCount(`${name}[Author] AND (${secondaryQuery})`);
+    const secondaryRatio = secondaryCount / cappedTotal;
+    await new Promise((r) => setTimeout(r, 400));
+
+    // Text words (TIAB): hit ratio * weight 0.5, scaled to 4 points max
+    const textQuery = TEXT_WORDS.map((t) => `"${t.term}"[TIAB]`).join(" OR ");
+    const textCount = await pubmedCount(`${name}[Author] AND (${textQuery})`);
+    const textRatio = textCount / cappedTotal;
+
+    // Score: each tier contributes proportionally
+    // Primary up to 8 pts, secondary up to 4, text words up to 8 = 20 max
+    // Text words weighted heavily because they catch Virta-specific language
+    // (nutritional ketosis, carbohydrate restriction, diabetes remission)
+    const score = (primaryRatio * 8) + (secondaryRatio * 4) + (textRatio * 8);
+    return clamp(Math.round(score * 100) / 100);
   } catch {
     return fallbackClinicalRelevance(author);
   }
 }
 
 function fallbackClinicalRelevance(author) {
-  // Fallback: OpenAlex concept matching
+  // Fallback: OpenAlex concept matching with same term set
   const targets = [
-    { label: "type 2 diabetes", weight: 1.0 },
-    { label: "obesity", weight: 0.9 },
-    { label: "metabolic syndrome", weight: 0.9 },
-    { label: "insulin resistance", weight: 0.8 },
-    { label: "dietary supplement", weight: 0.6 },
+    ...MESH_PRIMARY.map((t) => ({ label: t.term.toLowerCase(), weight: t.weight })),
+    ...MESH_SECONDARY.map((t) => ({ label: t.term.toLowerCase(), weight: t.weight })),
   ];
 
   const conceptText = (author.concepts || [])
