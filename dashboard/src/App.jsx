@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import NetworkGraph from "./components/NetworkGraph";
 import KOLTable from "./components/KOLTable";
 import CSVImportExport from "./components/CSVImportExport";
+import CREDReview from "./components/CREDReview";
 import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
@@ -9,6 +10,7 @@ const TABS = [
   { id: "graph", label: "Network Graph" },
   { id: "table", label: "KOL Table" },
   { id: "csv", label: "CSV Import/Export" },
+  { id: "cred", label: "CRED Review" },
 ];
 
 function GearIcon() {
@@ -136,6 +138,9 @@ export default function App() {
         )}
         {tab === "csv" && (
           <CSVImportExport nodes={graphData.nodes} />
+        )}
+        {tab === "cred" && (
+          <CREDReview />
         )}
       </div>
 
