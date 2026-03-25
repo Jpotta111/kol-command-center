@@ -10,7 +10,9 @@ const TABS = [
   { id: "graph", label: "Network Graph" },
   { id: "table", label: "KOL Table" },
   { id: "csv", label: "CSV Import/Export" },
-  { id: "cred", label: "CRED Review" },
+  // CRED Review tab — hidden from public UI, available for
+  // future password-protected access. Sprint 8b complete.
+  // { id: "cred", label: "CRED Review" },
 ];
 
 function GearIcon() {
