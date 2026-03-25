@@ -13,6 +13,35 @@
     {"id": "T10027", "label": "Diabetes, Cardiovascular Risks, and Lipoproteins", "weight": 0.8},
     {"id": "T12267", "label": "Diet and metabolism studies", "weight": 0.8}
   ],
+  "pubmed_mesh_terms": {
+    "primary": [
+      {"term": "Diabetes Mellitus, Type 2", "weight": 1.0},
+      {"term": "Diet, Ketogenic", "weight": 1.0},
+      {"term": "Diet, Carbohydrate-Restricted", "weight": 1.0},
+      {"term": "Insulin Resistance", "weight": 1.0},
+      {"term": "Glycated Hemoglobin", "weight": 1.0},
+      {"term": "Hypoglycemic Agents", "weight": 1.0}
+    ],
+    "secondary": [
+      {"term": "Obesity", "weight": 0.7},
+      {"term": "Weight Loss", "weight": 0.7},
+      {"term": "Dyslipidemias", "weight": 0.7},
+      {"term": "Triglycerides", "weight": 0.7},
+      {"term": "Hypertension", "weight": 0.7},
+      {"term": "C-Reactive Protein", "weight": 0.7},
+      {"term": "Cardiovascular Diseases", "weight": 0.7},
+      {"term": "Metabolic Syndrome", "weight": 0.7},
+      {"term": "Telemedicine", "weight": 0.7}
+    ],
+    "text_words": [
+      {"term": "nutritional ketosis", "weight": 0.5},
+      {"term": "carbohydrate restriction", "weight": 0.5},
+      {"term": "low carbohydrate", "weight": 0.5},
+      {"term": "continuous care", "weight": 0.5},
+      {"term": "diabetes reversal", "weight": 0.5},
+      {"term": "diabetes remission", "weight": 0.5}
+    ]
+  },
   "nutrition_keywords": [
     "low carbohydrate", "low-carbohydrate", "ketogenic",
     "carbohydrate restriction", "dietary intervention",
@@ -24,11 +53,11 @@
     "years_active_recent": 3
   },
   "ops_weights": {
-    "scientific_influence": 20,
-    "clinical_alignment": 20,
-    "reach_visibility": 20,
+    "institutional_credibility": 20,
+    "clinical_relevance": 20,
+    "collaboration_signal": 20,
     "nutrition_openness": 20,
-    "strategic_value": 20
+    "strategic_reach": 20
   },
   "tier_thresholds": {"A": 80, "B": 60, "C": 40},
   "target_author_count": 500,
