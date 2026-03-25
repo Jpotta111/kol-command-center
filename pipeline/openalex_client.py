@@ -253,6 +253,80 @@ def fetch_authors(
     return authors
 
 
+def search_author_by_name(
+    display_name: str,
+    institution: str | None = None,
+    email: str = "",
+) -> dict | None:
+    """
+    Search OpenAlex for a single author by name, optionally filtering by institution.
+
+    Returns the best-matching parsed author dict if confidence > 0.8, else None.
+    Confidence is based on name similarity and institution match.
+    """
+    params = {
+        "search": display_name,
+        "per_page": 5,
+        "mailto": email,
+    }
+    url = f"{BASE_URL}/authors?{urlencode(params)}"
+
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.warning("OpenAlex search failed for '%s': %s", display_name, e)
+        return None
+
+    results = resp.json().get("results", [])
+    if not results:
+        return None
+
+    # Score candidates by name + institution similarity
+    query_name = display_name.strip().lower()
+    query_inst = (institution or "").strip().lower()
+
+    best_match = None
+    best_score = 0.0
+
+    for raw in results:
+        candidate_name = (raw.get("display_name") or "").strip().lower()
+
+        # Name similarity: simple token overlap
+        query_tokens = set(query_name.split())
+        cand_tokens = set(candidate_name.split())
+        if not query_tokens or not cand_tokens:
+            continue
+        name_overlap = len(query_tokens & cand_tokens) / max(len(query_tokens), len(cand_tokens))
+
+        # Institution similarity boost
+        inst_boost = 0.0
+        if query_inst:
+            last_known = raw.get("last_known_institutions") or []
+            for inst in last_known:
+                inst_name = (inst.get("display_name") or "").lower()
+                if query_inst in inst_name or inst_name in query_inst:
+                    inst_boost = 0.2
+                    break
+
+        confidence = min(1.0, name_overlap + inst_boost)
+
+        if confidence > best_score:
+            best_score = confidence
+            best_match = raw
+
+    if best_score < 0.8 or best_match is None:
+        return None
+
+    author = _parse_author(best_match)
+
+    # Fetch recent work titles for this single author
+    titles_map = _fetch_recent_work_titles([author["openalex_id"]], email)
+    author["recent_work_titles"] = titles_map.get(author["openalex_id"], [])
+
+    return author
+
+
 # ---------------------------------------------------------------------------
 # CLI test harness
 # ---------------------------------------------------------------------------

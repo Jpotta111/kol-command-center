@@ -1,5 +1,18 @@
 {
   "buildCommand": "cd dashboard && npm install && npm run build",
   "outputDirectory": "dashboard/dist",
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "functions": {
+    "dashboard/api/enrich.js": {
+      "memory": 256,
+      "maxDuration": 60
+    },
+    "dashboard/api/profile.js": {
+      "memory": 256,
+      "maxDuration": 120
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/dashboard/api/$1" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }
