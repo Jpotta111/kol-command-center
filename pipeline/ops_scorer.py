@@ -97,103 +97,141 @@ def score_institutional_credibility(author: dict) -> float:
 
 
 # ── Dimension 2: Clinical Relevance via PubMed (0-20) ──────────────────
-# Weighted multi-tier: primary MeSH (1.0), secondary MeSH (0.7), text words (0.5)
+# Per-paper MeSH + text word matching from fetched PubMed XML
 
 PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
 
 MESH_PRIMARY = [
-    {"term": "Diabetes Mellitus, Type 2", "weight": 1.0},
-    {"term": "Diet, Ketogenic", "weight": 1.0},
-    {"term": "Diet, Carbohydrate-Restricted", "weight": 1.0},
-    {"term": "Insulin Resistance", "weight": 1.0},
-    {"term": "Glycated Hemoglobin", "weight": 1.0},
-    {"term": "Hypoglycemic Agents", "weight": 1.0},
+    "Diabetes Mellitus, Type 2", "Diet, Ketogenic",
+    "Diet, Carbohydrate-Restricted", "Insulin Resistance",
+    "Glycated Hemoglobin", "Hypoglycemic Agents",
+    "Blood Glucose", "Non-alcoholic Fatty Liver Disease",
 ]
 
 MESH_SECONDARY = [
-    {"term": "Obesity", "weight": 0.7},
-    {"term": "Weight Loss", "weight": 0.7},
-    {"term": "Dyslipidemias", "weight": 0.7},
-    {"term": "Triglycerides", "weight": 0.7},
-    {"term": "Hypertension", "weight": 0.7},
-    {"term": "C-Reactive Protein", "weight": 0.7},
-    {"term": "Cardiovascular Diseases", "weight": 0.7},
-    {"term": "Metabolic Syndrome", "weight": 0.7},
-    {"term": "Telemedicine", "weight": 0.7},
+    "Obesity", "Weight Loss", "Dyslipidemias", "Triglycerides",
+    "Hypertension", "C-Reactive Protein", "Cardiovascular Diseases",
+    "Metabolic Syndrome", "Telemedicine", "Pancreatic Neoplasms",
+    "Mental Disorders", "Depression", "Cognitive Dysfunction", "Fatty Liver",
 ]
 
 TEXT_WORDS = [
-    {"term": "nutritional ketosis", "weight": 0.5},
-    {"term": "carbohydrate restriction", "weight": 0.5},
-    {"term": "low carbohydrate", "weight": 0.5},
-    {"term": "continuous care", "weight": 0.5},
-    {"term": "diabetes reversal", "weight": 0.5},
-    {"term": "diabetes remission", "weight": 0.5},
+    "nutritional ketosis", "carbohydrate restriction",
+    "low carbohydrate", "low-carbohydrate", "continuous care",
+    "diabetes reversal", "diabetes remission", "ketogenic diet",
+    "MASLD", "MASH", "metabolic-associated steatotic",
+    "metabolic-associated steatohepatitis", "NAFLD", "NASH",
+    "pancreatic cancer", "metabolic psychiatry",
+    "cognitive function", "brain health",
 ]
 
-ALL_MESH = MESH_PRIMARY + MESH_SECONDARY
+import re as _re
+import time as _time
+import xml.etree.ElementTree as _ET
 
 
-def _pubmed_count(query: str) -> int:
-    """Run a PubMed count query."""
+def _pubmed_search(name: str, retmax: int = 50) -> dict:
+    """Search PubMed, return {count, idlist}."""
     params = urlencode({
-        "db": "pubmed", "term": query,
-        "rettype": "count", "retmode": "json",
+        "db": "pubmed", "term": f"{name}[Author]",
+        "retmax": str(retmax), "retmode": "json",
     })
     resp = requests.get(f"{PUBMED_BASE}/esearch.fcgi?{params}", timeout=10)
     resp.raise_for_status()
-    return int(resp.json().get("esearchresult", {}).get("count", 0))
+    result = resp.json().get("esearchresult", {})
+    return {
+        "count": int(result.get("count", 0)),
+        "idlist": result.get("idlist", []),
+    }
 
 
-def score_clinical_relevance(author: dict, config: dict) -> float:
-    """Weighted PubMed MeSH scoring; falls back to OpenAlex concepts."""
-    import time
+def _pubmed_fetch_xml(pmids: list[str]) -> str:
+    """Fetch PubMed article XML for given PMIDs."""
+    if not pmids:
+        return ""
+    params = urlencode({"db": "pubmed", "id": ",".join(pmids), "retmode": "xml"})
+    resp = requests.get(f"{PUBMED_BASE}/efetch.fcgi?{params}", timeout=15)
+    resp.raise_for_status()
+    return resp.text
 
-    name = author.get("display_name", "")
-    if not name:
-        return 10.0
 
-    try:
-        total_count = _pubmed_count(f"{name}[Author]")
-        if total_count == 0:
+def _extract_affiliation(xml_text: str) -> str | None:
+    """Extract affiliation from first article in PubMed XML."""
+    match = _re.search(r"<Affiliation>([^<]+)</Affiliation>", xml_text)
+    return match.group(1).strip() if match else None
+
+
+def _extract_mesh_terms(xml_text: str) -> list[str]:
+    """Extract all MeSH DescriptorName values."""
+    return _re.findall(r"<DescriptorName[^>]*>([^<]+)</DescriptorName>", xml_text)
+
+
+def _extract_text_content(xml_text: str) -> str:
+    """Extract all titles + abstract text for TIAB matching."""
+    titles = _re.findall(r"<ArticleTitle>([^<]+)</ArticleTitle>", xml_text)
+    abstracts = _re.findall(r"<AbstractText[^>]*>([^<]+)</AbstractText>", xml_text)
+    return " ".join(titles + abstracts)
+
+
+def pubmed_lookup(name: str) -> dict | None:
+    """Full PubMed lookup: search + fetch XML + extract data."""
+    search = _pubmed_search(name, retmax=10)
+    if search["count"] == 0 or not search["idlist"]:
+        return None
+
+    _time.sleep(0.4)
+    xml = _pubmed_fetch_xml(search["idlist"])
+
+    return {
+        "total_count": search["count"],
+        "fetched_count": len(search["idlist"]),
+        "affiliation": _extract_affiliation(xml),
+        "mesh_terms": _extract_mesh_terms(xml),
+        "text_content": _extract_text_content(xml),
+    }
+
+
+def score_clinical_relevance(author: dict, config: dict, pubmed_data: dict | None = None) -> float:
+    """Score clinical relevance from PubMed MeSH/text data."""
+    if pubmed_data is None:
+        # Try live lookup
+        name = author.get("display_name", "")
+        if not name:
+            return 5.0
+        try:
+            pubmed_data = pubmed_lookup(name)
+        except Exception as e:
+            logger.warning("PubMed lookup failed for %s: %s", name, e)
             return _fallback_clinical_relevance(author, config)
 
-        capped_total = min(total_count, 500)
-
-        # Primary MeSH: hit ratio scaled to 10 points max
-        primary_query = " OR ".join(f'"{t["term"]}"[MeSH]' for t in MESH_PRIMARY)
-        primary_count = _pubmed_count(f"{name}[Author] AND ({primary_query})")
-        primary_ratio = primary_count / capped_total
-        time.sleep(0.4)
-
-        # Secondary MeSH: hit ratio scaled to 6 points max
-        secondary_query = " OR ".join(f'"{t["term"]}"[MeSH]' for t in MESH_SECONDARY)
-        secondary_count = _pubmed_count(f"{name}[Author] AND ({secondary_query})")
-        secondary_ratio = secondary_count / capped_total
-        time.sleep(0.4)
-
-        # Text words (TIAB): hit ratio scaled to 4 points max
-        text_query = " OR ".join(f'"{t["term"]}"[TIAB]' for t in TEXT_WORDS)
-        text_count = _pubmed_count(f"{name}[Author] AND ({text_query})")
-        text_ratio = text_count / capped_total
-
-        # Primary up to 8 pts, secondary up to 4, text words up to 8 = 20 max
-        # Text words weighted heavily — catch Virta-specific language
-        # (nutritional ketosis, carbohydrate restriction, diabetes remission)
-        score = (primary_ratio * 8) + (secondary_ratio * 4) + (text_ratio * 8)
-        return _clamp(round(score, 2))
-
-    except Exception as e:
-        logger.warning("PubMed lookup failed for %s: %s", name, e)
+    if not pubmed_data or pubmed_data["fetched_count"] == 0:
         return _fallback_clinical_relevance(author, config)
+
+    mesh_terms = pubmed_data["mesh_terms"]
+    text_content = (pubmed_data.get("text_content") or "").lower()
+    fetched = pubmed_data["fetched_count"]
+
+    # Count primary MeSH hits
+    primary_hits = sum(1 for m in mesh_terms if m in MESH_PRIMARY)
+    # Count secondary MeSH hits
+    secondary_hits = sum(1 for m in mesh_terms if m in MESH_SECONDARY)
+    # Count text word hits
+    text_hits = 0
+    for tw in TEXT_WORDS:
+        text_hits += len(_re.findall(_re.escape(tw.lower()), text_content))
+
+    # Primary: up to 8 pts, secondary: up to 4 pts, text: up to 8 pts = 20 max
+    # Multipliers tuned so a dedicated keto/T2D researcher scores 16-20
+    primary_score = min(8.0, (primary_hits / fetched) * 20)
+    secondary_score = min(4.0, (secondary_hits / fetched) * 12)
+    text_score = min(8.0, (text_hits / fetched) * 16)
+
+    return _clamp(round(primary_score + secondary_score + text_score, 2))
 
 
 def _fallback_clinical_relevance(author: dict, config: dict) -> float:
     """OpenAlex concept matching fallback using same term set."""
-    targets = [
-        {"label": t["term"].lower(), "weight": t["weight"]}
-        for t in ALL_MESH
-    ]
+    all_terms = [(t, 1.0) for t in MESH_PRIMARY] + [(t, 0.7) for t in MESH_SECONDARY]
 
     author_concept_text = " ".join(
         c.get("display_name", "") if isinstance(c, dict) else str(c)
@@ -202,10 +240,10 @@ def _fallback_clinical_relevance(author: dict, config: dict) -> float:
 
     matched_weight = 0.0
     total_weight = 0.0
-    for tc in targets:
-        total_weight += tc["weight"]
-        if tc["label"] in author_concept_text:
-            matched_weight += tc["weight"]
+    for label, weight in all_terms:
+        total_weight += weight
+        if label.lower() in author_concept_text:
+            matched_weight += weight
 
     if total_weight == 0:
         return 10.0
@@ -345,6 +383,7 @@ def compute_ops_score(
     population_h_indices: list[float] | None = None,
     centrality_map: dict | None = None,
     contact: dict | None = None,
+    pubmed_data: dict | None = None,
 ) -> dict:
     """
     Compute full OPS score for a single author.
@@ -358,7 +397,7 @@ def compute_ops_score(
     thresholds = config.get("tier_thresholds", {"A": 80, "B": 60, "C": 40})
 
     inst_cred = score_institutional_credibility(author)
-    clin_rel = score_clinical_relevance(author, config)
+    clin_rel = score_clinical_relevance(author, config, pubmed_data)
     collab_score, collab_reason = score_collaboration_signal(author, pharma_data, contact)
     nutr = score_nutrition_openness(author, config, collab_score)
     strat = score_strategic_reach(author, pharma_data)

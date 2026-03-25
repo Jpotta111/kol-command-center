@@ -20,7 +20,9 @@
       {"term": "Diet, Carbohydrate-Restricted", "weight": 1.0},
       {"term": "Insulin Resistance", "weight": 1.0},
       {"term": "Glycated Hemoglobin", "weight": 1.0},
-      {"term": "Hypoglycemic Agents", "weight": 1.0}
+      {"term": "Hypoglycemic Agents", "weight": 1.0},
+      {"term": "Blood Glucose", "weight": 1.0},
+      {"term": "Non-alcoholic Fatty Liver Disease", "weight": 1.0}
     ],
     "secondary": [
       {"term": "Obesity", "weight": 0.7},
@@ -31,15 +33,32 @@
       {"term": "C-Reactive Protein", "weight": 0.7},
       {"term": "Cardiovascular Diseases", "weight": 0.7},
       {"term": "Metabolic Syndrome", "weight": 0.7},
-      {"term": "Telemedicine", "weight": 0.7}
+      {"term": "Telemedicine", "weight": 0.7},
+      {"term": "Pancreatic Neoplasms", "weight": 0.7},
+      {"term": "Mental Disorders", "weight": 0.7},
+      {"term": "Depression", "weight": 0.7},
+      {"term": "Cognitive Dysfunction", "weight": 0.7},
+      {"term": "Fatty Liver", "weight": 0.7}
     ],
     "text_words": [
       {"term": "nutritional ketosis", "weight": 0.5},
       {"term": "carbohydrate restriction", "weight": 0.5},
       {"term": "low carbohydrate", "weight": 0.5},
+      {"term": "low-carbohydrate", "weight": 0.5},
       {"term": "continuous care", "weight": 0.5},
       {"term": "diabetes reversal", "weight": 0.5},
-      {"term": "diabetes remission", "weight": 0.5}
+      {"term": "diabetes remission", "weight": 0.5},
+      {"term": "ketogenic diet", "weight": 0.5},
+      {"term": "MASLD", "weight": 0.5},
+      {"term": "MASH", "weight": 0.5},
+      {"term": "metabolic-associated steatotic", "weight": 0.5},
+      {"term": "metabolic-associated steatohepatitis", "weight": 0.5},
+      {"term": "NAFLD", "weight": 0.5},
+      {"term": "NASH", "weight": 0.5},
+      {"term": "pancreatic cancer", "weight": 0.5},
+      {"term": "metabolic psychiatry", "weight": 0.5},
+      {"term": "cognitive function", "weight": 0.5},
+      {"term": "brain health", "weight": 0.5}
     ]
   },
   "nutrition_keywords": [
