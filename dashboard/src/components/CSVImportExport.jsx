@@ -45,7 +45,7 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export default function CSVImportExport({ nodes }) {
+export default function CSVImportExport({ nodes, onContactsLoaded }) {
   const [dragOver, setDragOver] = useState(false);
   const [enrichResult, setEnrichResult] = useState(null);
   const [enrichedRows, setEnrichedRows] = useState(null);
@@ -94,6 +94,7 @@ export default function CSVImportExport({ nodes }) {
 
       setEnrichResult({ matched, notFound, total, blob });
       setEnrichedRows(rows);
+      if (onContactsLoaded) onContactsLoaded(rows);
     } catch (err) {
       console.error("Enrichment failed:", err);
       setError(err.message);
