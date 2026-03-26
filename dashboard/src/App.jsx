@@ -4,6 +4,7 @@ import KOLTable from "./components/KOLTable";
 import CSVImportExport from "./components/CSVImportExport";
 import CREDReview from "./components/CREDReview";
 import Publications from "./components/Publications";
+import Pipeline from "./components/Pipeline";
 import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
@@ -11,6 +12,7 @@ const TABS = [
   { id: "graph", label: "Network Graph" },
   { id: "table", label: "KOL Table" },
   { id: "csv", label: "CSV Import/Export" },
+  { id: "pipeline", label: "Pipeline" },
   { id: "pubs", label: "Publications" },
   // CRED Review tab — hidden from public UI, available for
   // future password-protected access. Sprint 8b complete.
@@ -43,8 +45,11 @@ export default function App() {
   const [selectedKOL, setSelectedKOL] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
+  // Shared state: pipeline contacts from CSV upload
+  const [pipelineContacts, setPipelineContacts] = useState(null);
+  const [pipelineUploadDate, setPipelineUploadDate] = useState(null);
+
   useEffect(() => {
-    // Try loading real pipeline data, fall back to sample
     Promise.all([
       fetch("/data/kol_graph.json")
         .then((r) => (r.ok ? r.json() : null))
@@ -141,7 +146,19 @@ export default function App() {
           />
         )}
         {tab === "csv" && (
-          <CSVImportExport nodes={graphData.nodes} />
+          <CSVImportExport
+            nodes={graphData.nodes}
+            onContactsLoaded={(rows) => {
+              setPipelineContacts(rows);
+              setPipelineUploadDate(new Date().toLocaleDateString());
+            }}
+          />
+        )}
+        {tab === "pipeline" && (
+          <Pipeline
+            contacts={pipelineContacts}
+            uploadDate={pipelineUploadDate}
+          />
         )}
         {tab === "pubs" && (
           <Publications nodes={graphData.nodes} />
