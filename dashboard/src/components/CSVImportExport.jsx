@@ -45,11 +45,12 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export default function CSVImportExport({ nodes, onContactsLoaded }) {
+export default function CSVImportExport({ nodes, onContactsLoaded, kolMode = "All" }) {
   const [dragOver, setDragOver] = useState(false);
   const [enrichResult, setEnrichResult] = useState(null);
   const [enrichedRows, setEnrichedRows] = useState(null);
   const [enriching, setEnriching] = useState(false);
+  const [commercialResult, setCommercialResult] = useState(null);
   const [error, setError] = useState(null);
 
   // Profile generation state
@@ -64,37 +65,101 @@ export default function CSVImportExport({ nodes, onContactsLoaded }) {
     setEnrichedRows(null);
     setProfiles(null);
     setProfileError(null);
+    setCommercialResult(null);
     setError(null);
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      // First, parse CSV locally to detect KOL Type column
+      const rawText = await file.text();
+      const rawParsed = Papa.parse(rawText, { header: true, skipEmptyLines: true });
+      const allRows = rawParsed.data;
 
-      const resp = await fetch("/api/enrich", {
-        method: "POST",
-        headers: getApiHeaders(),
-        body: formData,
+      // Split by KOL Type
+      const commercialRows = allRows.filter((r) =>
+        (r["KOL Type"] || r.kol_type || "").toLowerCase() === "commercial"
+      );
+      const researchRows = allRows.filter((r) => {
+        const kt = (r["KOL Type"] || r.kol_type || "").toLowerCase();
+        return kt !== "commercial";
       });
 
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: resp.statusText }));
-        throw new Error(err.error || `Server error: ${resp.status}`);
+      // Enrich research contacts via /api/enrich
+      let enrichedResearchRows = [];
+      let researchStats = { matched: 0, notFound: 0, total: researchRows.length };
+
+      if (researchRows.length > 0) {
+        // Rebuild CSV with only research rows
+        const researchCsv = Papa.unparse(researchRows);
+        const researchBlob = new Blob([researchCsv], { type: "text/csv" });
+        const formData = new FormData();
+        formData.append("file", new File([researchBlob], "research.csv", { type: "text/csv" }));
+
+        const resp = await fetch("/api/enrich", {
+          method: "POST",
+          headers: getApiHeaders(),
+          body: formData,
+        });
+
+        if (resp.ok) {
+          researchStats.matched = parseInt(resp.headers.get("X-Enrichment-Matched") || "0", 10);
+          researchStats.notFound = parseInt(resp.headers.get("X-Enrichment-NotFound") || "0", 10);
+          const csvText = await (await resp.blob()).text();
+          enrichedResearchRows = Papa.parse(csvText, { header: true, skipEmptyLines: true }).data;
+        }
       }
 
-      const matched = parseInt(resp.headers.get("X-Enrichment-Matched") || "0", 10);
-      const notFound = parseInt(resp.headers.get("X-Enrichment-NotFound") || "0", 10);
-      const total = parseInt(resp.headers.get("X-Enrichment-Total") || "0", 10);
+      // Enrich commercial contacts via /api/commercial-enrich
+      let enrichedCommercialRows = [];
+      if (commercialRows.length > 0) {
+        const commPayload = commercialRows.map((r) => ({
+          hs_object_id: r.hs_object_id || r["Record ID"] || "",
+          display_name: r.display_name || r.Name || r.name || `${r.firstname || ""} ${r.lastname || ""}`.trim(),
+          company: r.company || r.Company || r.institution || r.Institution || "",
+          job_title: r.job_title || r.jobtitle || r["Job Title"] || "",
+          kol_type: "Commercial",
+        }));
 
-      const blob = await resp.blob();
-      const csvText = await blob.text();
+        try {
+          const commResp = await fetch("/api/commercial-enrich", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...getApiHeaders() },
+            body: JSON.stringify(commPayload),
+          });
+          if (commResp.ok) {
+            enrichedCommercialRows = await commResp.json();
+          }
+        } catch {
+          // Commercial enrichment failed — keep raw rows
+        }
 
-      // Parse the enriched CSV so we can merge profiles later
-      const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-      const rows = parsed.data;
+        setCommercialResult({
+          total: commercialRows.length,
+          enriched: enrichedCommercialRows.length,
+        });
+      }
 
-      setEnrichResult({ matched, notFound, total, blob });
-      setEnrichedRows(rows);
-      if (onContactsLoaded) onContactsLoaded(rows);
+      // Merge all rows for pipeline view
+      const allEnrichedRows = [
+        ...enrichedResearchRows.map((r) => ({ ...r, kol_type: "Research" })),
+        ...enrichedCommercialRows.map((r) => ({ ...r, kol_type: "Commercial" })),
+        ...commercialRows.filter((_, i) => i >= enrichedCommercialRows.length)
+          .map((r) => ({ ...r, kol_type: "Commercial" })),
+      ];
+
+      // Create combined blob for download
+      const combinedCsv = Papa.unparse(allEnrichedRows);
+      const combinedBlob = new Blob([combinedCsv], { type: "text/csv;charset=utf-8;" });
+
+      setEnrichResult({
+        matched: researchStats.matched,
+        notFound: researchStats.notFound,
+        total: allRows.length,
+        blob: combinedBlob,
+        researchCount: researchRows.length,
+        commercialCount: commercialRows.length,
+      });
+      setEnrichedRows(allEnrichedRows);
+      if (onContactsLoaded) onContactsLoaded(allEnrichedRows);
     } catch (err) {
       console.error("Enrichment failed:", err);
       setError(err.message);
@@ -327,7 +392,9 @@ export default function CSVImportExport({ nodes, onContactsLoaded }) {
         {enrichResult && (
           <div className="mt-3 bg-gray-50 rounded-lg p-4 space-y-3">
             <p className="text-sm font-semibold text-gray-800">
-              Matched {enrichResult.matched} of {enrichResult.total} contacts
+              {enrichResult.researchCount > 0 && `Research: ${enrichResult.matched} matched`}
+              {enrichResult.commercialCount > 0 && ` | Commercial: ${enrichResult.commercialCount} enriched`}
+              {!enrichResult.researchCount && !enrichResult.commercialCount && `Matched ${enrichResult.matched} of ${enrichResult.total} contacts`}
             </p>
             {enrichResult.notFound > 0 && (
               <p className="text-xs text-gray-500">

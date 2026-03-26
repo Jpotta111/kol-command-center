@@ -22,12 +22,19 @@ function downloadCSV(rows, filename) {
   URL.revokeObjectURL(url);
 }
 
-export default function KOLTable({ nodes, profiles, onSelectKOL }) {
-  const [sortKey, setSortKey] = useState("ops_score");
+export default function KOLTable({ nodes, profiles, onSelectKOL, kolMode = "All", pipelineContacts }) {
+  const isCommercial = kolMode === "Commercial";
+  const [sortKey, setSortKey] = useState(isCommercial ? "confirmed_organization" : "ops_score");
   const [sortAsc, setSortAsc] = useState(false);
   const [tierFilter, setTierFilter] = useState("");
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState(new Set());
+
+  // In commercial mode, use pipelineContacts filtered to commercial KOL Type
+  const commercialContacts = (pipelineContacts || []).filter((c) => {
+    const kt = (c["KOL Type"] || c.kol_type || "").toLowerCase();
+    return kt === "commercial";
+  });
 
   const profileMap = useMemo(() => {
     const m = {};
@@ -126,6 +133,72 @@ export default function KOLTable({ nodes, profiles, onSelectKOL }) {
     </th>
   );
 
+  // ── Commercial table view ─────────────────────────────────────────────
+  if (isCommercial) {
+    const commFiltered = commercialContacts.filter((c) => {
+      if (!search) return true;
+      const q = search.toLowerCase();
+      const name = (c.display_name || c.name || `${c.firstname || ""} ${c.lastname || ""}`.trim()).toLowerCase();
+      const org = (c.confirmed_organization || c.company || c.Company || "").toLowerCase();
+      return name.includes(q) || org.includes(q);
+    });
+
+    const confColor = { HIGH: "bg-green-100 text-green-800", MEDIUM: "bg-yellow-100 text-yellow-800", LOW: "bg-red-100 text-red-800" };
+
+    return (
+      <div className="h-full flex flex-col p-4 gap-3 overflow-hidden">
+        <div className="flex items-center gap-3">
+          <input type="text" placeholder="Search name or organization..." value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="border border-gray-300 rounded px-3 py-1.5 text-sm w-64 focus:outline-none focus:border-teal-primary" />
+          <span className="ml-auto text-xs text-gray-500">{commFiltered.length} commercial contacts</span>
+        </div>
+        <div className="flex-1 overflow-auto border border-gray-200 rounded-lg">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 sticky top-0">
+              <tr>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Name</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Title</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Organization</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Org Type</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Covered Lives</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">SME Owner</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Deal Stage</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              {commFiltered.map((c, i) => {
+                const name = c.display_name || c.name || `${c.firstname || ""} ${c.lastname || ""}`.trim();
+                const conf = c.data_confidence || "";
+                return (
+                  <tr key={i} className="border-t border-gray-100 hover:bg-teal-light/40">
+                    <td className="px-3 py-1.5 font-medium text-gray-900">{name}</td>
+                    <td className="px-3 py-1.5 text-xs text-gray-600">{c.confirmed_title || c.job_title || c.jobtitle || ""}</td>
+                    <td className="px-3 py-1.5 text-xs text-gray-600">{c.confirmed_organization || c.company || c.Company || ""}</td>
+                    <td className="px-3 py-1.5 text-xs">{c.org_type || ""}</td>
+                    <td className="px-3 py-1.5 text-xs">{c.covered_lives ? Number(c.covered_lives).toLocaleString() : ""}</td>
+                    <td className="px-3 py-1.5 text-xs">{c["SME Owner"] || c.sme_owner || ""}</td>
+                    <td className="px-3 py-1.5 text-xs">{c.deal_stage || c["Deal Stage"] || ""}</td>
+                    <td className="px-3 py-1.5">
+                      {conf && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${confColor[conf] || "bg-gray-100 text-gray-600"}`}>{conf}</span>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {commFiltered.length === 0 && (
+                <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400 text-sm">
+                  No commercial contacts found. Upload a CSV with "KOL Type" = "Commercial" in the CSV Import/Export tab.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Research table view (default) ──────────────────────────────────────
   return (
     <div className="h-full flex flex-col p-4 gap-3 overflow-hidden">
       {/* Re-engagement queue */}

@@ -19,27 +19,30 @@ const TABS = [
   // { id: "cred", label: "CRED Review" },
 ];
 
+const KOL_MODES = ["All", "Research", "Commercial"];
+
 function GearIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
       <circle cx="12" cy="12" r="3" />
     </svg>
   );
 }
 
+function ModeBlocker({ message }) {
+  return (
+    <div className="h-full flex items-center justify-center p-6">
+      <div className="text-center max-w-md">
+        <p className="text-gray-400 text-sm">{message}</p>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("graph");
+  const [kolMode, setKolMode] = useState("All");
   const [graphData, setGraphData] = useState(null);
   const [profiles, setProfiles] = useState([]);
   const [selectedKOL, setSelectedKOL] = useState(null);
@@ -71,13 +74,34 @@ export default function App() {
     );
   }
 
+  const isCommercial = kolMode === "Commercial";
+  const isResearch = kolMode === "Research";
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Top nav */}
-      <nav className="bg-teal-primary text-white px-6 py-3 flex items-center gap-8 shrink-0">
-        <h1 className="text-lg font-bold tracking-tight mr-4">
+      <nav className="bg-teal-primary text-white px-6 py-3 flex items-center gap-6 shrink-0">
+        <h1 className="text-lg font-bold tracking-tight mr-2">
           KOL Command Center
         </h1>
+
+        {/* KOL Type toggle */}
+        <div className="flex bg-white/10 rounded p-0.5">
+          {KOL_MODES.map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setKolMode(mode)}
+              className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                kolMode === mode
+                  ? "bg-white text-teal-primary"
+                  : "text-white/70 hover:text-white"
+              }`}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+
         <div className="flex gap-1">
           {TABS.map((t) => (
             <button
@@ -113,14 +137,8 @@ export default function App() {
         <div className="bg-amber-50 border-b border-amber-200 px-6 py-2 text-xs text-amber-800 flex items-center gap-2">
           <span>
             Add your Gemini API key in{" "}
-            <button
-              onClick={() => setSettingsOpen(true)}
-              className="underline font-medium"
-            >
-              Settings
-            </button>{" "}
-            to enable AI profile generation. Authentication is not yet
-            configured — this app is currently open.
+            <button onClick={() => setSettingsOpen(true)} className="underline font-medium">Settings</button>
+            {" "}to enable AI features.
           </span>
         </div>
       )}
@@ -128,26 +146,23 @@ export default function App() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {tab === "graph" && (
-          <NetworkGraph
-            graphData={graphData}
-            profiles={profiles}
-            selectedKOL={selectedKOL}
-            onSelectKOL={setSelectedKOL}
-          />
+          isCommercial
+            ? <ModeBlocker message="Network graph is optimized for Research KOLs. Switch to Research or All view to use it." />
+            : <NetworkGraph graphData={graphData} profiles={profiles} selectedKOL={selectedKOL} onSelectKOL={setSelectedKOL} />
         )}
         {tab === "table" && (
           <KOLTable
             nodes={graphData.nodes}
             profiles={profiles}
-            onSelectKOL={(kol) => {
-              setSelectedKOL(kol);
-              setTab("graph");
-            }}
+            kolMode={kolMode}
+            pipelineContacts={pipelineContacts}
+            onSelectKOL={(kol) => { setSelectedKOL(kol); setTab("graph"); }}
           />
         )}
         {tab === "csv" && (
           <CSVImportExport
             nodes={graphData.nodes}
+            kolMode={kolMode}
             onContactsLoaded={(rows) => {
               setPipelineContacts(rows);
               setPipelineUploadDate(new Date().toLocaleDateString());
@@ -158,14 +173,15 @@ export default function App() {
           <Pipeline
             contacts={pipelineContacts}
             uploadDate={pipelineUploadDate}
+            kolMode={kolMode}
           />
         )}
         {tab === "pubs" && (
-          <Publications nodes={graphData.nodes} />
+          isCommercial
+            ? <ModeBlocker message="Publication monitoring is for Research KOLs. Switch to Research or All view." />
+            : <Publications nodes={graphData.nodes} />
         )}
-        {tab === "cred" && (
-          <CREDReview />
-        )}
+        {tab === "cred" && <CREDReview />}
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
