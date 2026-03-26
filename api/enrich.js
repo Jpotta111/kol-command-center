@@ -136,6 +136,69 @@ function extractAffiliation(xml) {
   return affMatch ? affMatch[1].trim() : null;
 }
 
+function extractAllAffiliations(xml) {
+  // Get ALL affiliation strings across all articles
+  const re = /<Affiliation>([^<]+)<\/Affiliation>/g;
+  const affiliations = [];
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    affiliations.push(m[1].trim());
+  }
+  return affiliations;
+}
+
+function extractModalInstitution(affiliations) {
+  // Parse institution names from affiliation strings and find most frequent
+  // All AMC keywords serve as institution identifiers
+  const allKeywords = [...TOP_AMC_KEYWORDS, ...MAJOR_SYSTEM_KEYWORDS];
+  const counts = {};
+
+  for (const aff of affiliations) {
+    const lower = aff.toLowerCase();
+
+    // Try matching against known institution keywords
+    let matched = null;
+    for (const kw of allKeywords) {
+      if (lower.includes(kw)) {
+        // Use the keyword as the canonical key
+        matched = kw;
+        break;
+      }
+    }
+
+    if (!matched) {
+      // Fallback: parse comma-delimited segments, take 2nd segment
+      // "Department of X, Institution Name, City, State"
+      const parts = aff.split(",").map((s) => s.trim());
+      if (parts.length >= 2) {
+        matched = parts[1].toLowerCase();
+      }
+    }
+
+    if (matched) {
+      counts[matched] = (counts[matched] || 0) + 1;
+    }
+  }
+
+  // Find most frequent institution that appears >= 2 times
+  let best = null;
+  let bestCount = 0;
+  for (const [inst, count] of Object.entries(counts)) {
+    if (count > bestCount) {
+      bestCount = count;
+      best = inst;
+    }
+  }
+
+  if (bestCount < 2) return null;
+
+  // Return the original affiliation string that matches the winning keyword
+  for (const aff of affiliations) {
+    if (aff.toLowerCase().includes(best)) return aff;
+  }
+  return null;
+}
+
 function extractMeshTerms(xml) {
   // Extract all MeSH descriptor names from the XML
   const terms = [];
@@ -170,8 +233,10 @@ async function lookupPubMed(name) {
   // Fetch XML for papers
   const xml = await pubmedFetchXml(search.idlist);
 
-  // Extract affiliation from most recent paper
+  // Extract affiliations: single most-recent + all for modal vote
   const affiliation = extractAffiliation(xml);
+  const allAffiliations = extractAllAffiliations(xml);
+  const modalAffiliation = extractModalInstitution(allAffiliations);
 
   // Extract MeSH terms across all fetched papers
   const meshTerms = extractMeshTerms(xml);
@@ -183,6 +248,8 @@ async function lookupPubMed(name) {
     total_count: search.count,
     fetched_count: search.idlist.length,
     affiliation,
+    modal_affiliation: modalAffiliation,
+    all_affiliations: allAffiliations,
     mesh_terms: meshTerms,
     text_content: textContent,
   };
@@ -501,7 +568,7 @@ export default async function handler(req, res) {
       "institutional_credibility_score", "clinical_relevance_score",
       "collaboration_signal_score", "collaboration_reason",
       "nutrition_openness_score", "strategic_reach_score",
-      "pubmed_affiliation",
+      "pubmed_affiliation", "institution_source",
       "openalex_id", "orcid", "top_paper_title", "top_paper_doi",
       "h_index", "citation_count", "institution",
       "nutrition_signal_keywords", "last_profiled_date",
@@ -543,9 +610,28 @@ export default async function handler(req, res) {
         notFound++; continue;
       }
 
-      // Use PubMed affiliation for institution (primary), CSV as fallback
+      // Institution resolution — priority stack
+      let institution = "";
+      let institutionSource = "";
       const pubmedAffiliation = pubmed?.affiliation || "";
-      const institution = pubmedAffiliation || oaMetrics?.institution || csvInstitution;
+
+      if (csvInstitution) {
+        // PRIORITY 1: HubSpot CSV input (highest trust — human entered)
+        institution = csvInstitution;
+        institutionSource = "hubspot";
+      } else if (pubmed?.modal_affiliation) {
+        // PRIORITY 2: Modal institution from recent PubMed papers
+        institution = pubmed.modal_affiliation;
+        institutionSource = "pubmed_modal";
+      } else if (oaMetrics?.institution) {
+        // PRIORITY 3: OpenAlex last_known_institution
+        institution = oaMetrics.institution;
+        institutionSource = "openalex";
+      } else if (pubmedAffiliation) {
+        // PRIORITY 4: Single most-recent PubMed paper (last resort)
+        institution = pubmedAffiliation;
+        institutionSource = "pubmed_recent";
+      }
       const hIndex = oaMetrics?.h_index || 0;
       const citationCount = oaMetrics?.citation_count || 0;
 
@@ -583,6 +669,7 @@ export default async function handler(req, res) {
         nutrition_openness_score: nutrOpen,
         strategic_reach_score: stratReach,
         pubmed_affiliation: pubmedAffiliation,
+        institution_source: institutionSource,
         openalex_id: oaMetrics?.openalex_id || "",
         orcid: oaMetrics?.orcid || "",
         top_paper_title: (recentTitles || [])[0] || "",
@@ -629,7 +716,7 @@ function emptyRow(hsId, status, existingTier) {
     institutional_credibility_score: "", clinical_relevance_score: "",
     collaboration_signal_score: "", collaboration_reason: "",
     nutrition_openness_score: "", strategic_reach_score: "",
-    pubmed_affiliation: "",
+    pubmed_affiliation: "", institution_source: "",
     openalex_id: "", orcid: "", top_paper_title: "", top_paper_doi: "",
     h_index: "", citation_count: "", institution: "",
     nutrition_signal_keywords: "", last_profiled_date: "",

@@ -169,6 +169,45 @@ def _extract_affiliation(xml_text: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+def _extract_all_affiliations(xml_text: str) -> list[str]:
+    """Extract ALL affiliation strings across all articles."""
+    return [m.strip() for m in _re.findall(r"<Affiliation>([^<]+)</Affiliation>", xml_text)]
+
+
+def _extract_modal_institution(affiliations: list[str]) -> str | None:
+    """Find most frequent institution from affiliation strings via keyword matching."""
+    all_keywords = TOP_AMC_KEYWORDS + MAJOR_SYSTEM_KEYWORDS
+    counts: dict[str, int] = {}
+
+    for aff in affiliations:
+        lower = aff.lower()
+        matched = None
+        for kw in all_keywords:
+            if kw in lower:
+                matched = kw
+                break
+        if not matched:
+            parts = [s.strip() for s in aff.split(",")]
+            if len(parts) >= 2:
+                matched = parts[1].lower()
+        if matched:
+            counts[matched] = counts.get(matched, 0) + 1
+
+    best, best_count = None, 0
+    for inst, count in counts.items():
+        if count > best_count:
+            best_count = count
+            best = inst
+
+    if best_count < 2 or not best:
+        return None
+
+    for aff in affiliations:
+        if best in aff.lower():
+            return aff
+    return None
+
+
 def _extract_mesh_terms(xml_text: str) -> list[str]:
     """Extract all MeSH DescriptorName values."""
     return _re.findall(r"<DescriptorName[^>]*>([^<]+)</DescriptorName>", xml_text)
@@ -183,17 +222,20 @@ def _extract_text_content(xml_text: str) -> str:
 
 def pubmed_lookup(name: str) -> dict | None:
     """Full PubMed lookup: search + fetch XML + extract data."""
-    search = _pubmed_search(name, retmax=10)
+    search = _pubmed_search(name, retmax=50)
     if search["count"] == 0 or not search["idlist"]:
         return None
 
     _time.sleep(0.4)
     xml = _pubmed_fetch_xml(search["idlist"])
 
+    all_affiliations = _extract_all_affiliations(xml)
     return {
         "total_count": search["count"],
         "fetched_count": len(search["idlist"]),
         "affiliation": _extract_affiliation(xml),
+        "modal_affiliation": _extract_modal_institution(all_affiliations),
+        "all_affiliations": all_affiliations,
         "mesh_terms": _extract_mesh_terms(xml),
         "text_content": _extract_text_content(xml),
     }
