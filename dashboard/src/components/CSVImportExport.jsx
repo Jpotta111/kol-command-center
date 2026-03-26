@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import Papa from "papaparse";
+import DiscoverLeads from "./DiscoverLeads";
 
 function getApiHeaders() {
   const headers = {};
@@ -45,7 +46,7 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url);
 }
 
-export default function CSVImportExport({ nodes, onContactsLoaded, kolMode = "All" }) {
+export default function CSVImportExport({ nodes, onContactsLoaded, onLeadsDiscovered, kolMode = "All" }) {
   const [dragOver, setDragOver] = useState(false);
   const [enrichResult, setEnrichResult] = useState(null);
   const [enrichedRows, setEnrichedRows] = useState(null);
@@ -562,6 +563,14 @@ export default function CSVImportExport({ nodes, onContactsLoaded, kolMode = "Al
             <span className="text-purple-600">Purple</span> = AI profile columns (requires Generate AI Profiles)
           </p>
         </div>
+      </section>
+
+      {/* Lead Discovery section */}
+      <section className="border-t border-gray-200 pt-6">
+        <DiscoverLeads
+          existingContacts={enrichedRows || nodes}
+          onLeadsDiscovered={onLeadsDiscovered}
+        />
       </section>
     </div>
   );

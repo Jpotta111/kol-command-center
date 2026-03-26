@@ -48,9 +48,10 @@ export default function App() {
   const [selectedKOL, setSelectedKOL] = useState(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // Shared state: pipeline contacts from CSV upload
+  // Shared state: pipeline contacts from CSV upload + discovered leads
   const [pipelineContacts, setPipelineContacts] = useState(null);
   const [pipelineUploadDate, setPipelineUploadDate] = useState(null);
+  const [discoveredLeads, setDiscoveredLeads] = useState([]);
 
   useEffect(() => {
     Promise.all([
@@ -166,6 +167,23 @@ export default function App() {
             onContactsLoaded={(rows) => {
               setPipelineContacts(rows);
               setPipelineUploadDate(new Date().toLocaleDateString());
+            }}
+            onLeadsDiscovered={(leads) => {
+              setDiscoveredLeads((prev) => [...prev, ...leads]);
+              // Merge into pipeline contacts
+              setPipelineContacts((prev) => [
+                ...(prev || []),
+                ...leads.map((l) => ({
+                  display_name: l.full_name,
+                  company: l.organization,
+                  institution: l.organization,
+                  kol_type: "Commercial",
+                  job_title: l.current_title,
+                  data_confidence: l.data_confidence,
+                  _discovered: true,
+                  pipeline_stage: "Prospect",
+                })),
+              ]);
             }}
           />
         )}

@@ -21,6 +21,10 @@
     "api/commercial-enrich.js": {
       "memory": 256,
       "maxDuration": 120
+    },
+    "api/discover-leads.js": {
+      "memory": 256,
+      "maxDuration": 120
     }
   },
   "rewrites": [
