@@ -3,6 +3,7 @@ import NetworkGraph from "./components/NetworkGraph";
 import KOLTable from "./components/KOLTable";
 import CSVImportExport from "./components/CSVImportExport";
 import CREDReview from "./components/CREDReview";
+import Publications from "./components/Publications";
 import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
@@ -10,6 +11,7 @@ const TABS = [
   { id: "graph", label: "Network Graph" },
   { id: "table", label: "KOL Table" },
   { id: "csv", label: "CSV Import/Export" },
+  { id: "pubs", label: "Publications" },
   // CRED Review tab — hidden from public UI, available for
   // future password-protected access. Sprint 8b complete.
   // { id: "cred", label: "CRED Review" },
@@ -140,6 +142,9 @@ export default function App() {
         )}
         {tab === "csv" && (
           <CSVImportExport nodes={graphData.nodes} />
+        )}
+        {tab === "pubs" && (
+          <Publications nodes={graphData.nodes} />
         )}
         {tab === "cred" && (
           <CREDReview />
