@@ -89,7 +89,7 @@ def _build_prompt(kol: dict, work_titles: list[str]) -> str:
     else:
         pharma_note = "Moderate or unknown pharma industry relationships."
 
-    return f"""You are an intelligence analyst for a Medical Affairs team at a company that reverses Type 2 diabetes through nutrition-first, low-carbohydrate dietary intervention (similar to Virta Health's approach).
+    return f"""You are an intelligence analyst for a Medical Affairs team at a company that reverses Type 2 diabetes through nutrition-first, low-carbohydrate dietary intervention (similar to [Company Name]'s approach).
 
 Analyze this Key Opinion Leader and produce a structured intelligence profile.
 

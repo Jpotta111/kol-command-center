@@ -50,7 +50,7 @@ function buildPrompt(kol, workTitles) {
   const cite = kol.citation_count;
   const citeStr = typeof cite === "number" ? cite.toLocaleString() : (cite || "N/A");
 
-  return `You are an intelligence analyst for a Medical Affairs team at a company that reverses Type 2 diabetes through nutrition-first, low-carbohydrate dietary intervention (similar to Virta Health's approach).
+  return `You are an intelligence analyst for a Medical Affairs team at a company that reverses Type 2 diabetes through nutrition-first, low-carbohydrate dietary intervention (similar to [Company Name]'s approach).
 
 Analyze this Key Opinion Leader and produce a structured intelligence profile.
 

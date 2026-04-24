@@ -27,9 +27,12 @@ function detectAreas(contact) {
 
 // ── Pipeline stage classification ──────────────────────────────────────
 
+// Column name for the co-author flag — override in your fork to match your HubSpot CSV.
+const COAUTHOR_COLUMN = "[coauthor_column_name]";
+
 function classifyStage(c) {
   const coauthor = ["true", "yes", "1"].includes(
-    (c["Virta Paper CoAuthor"] || c.virta_paper_coauthor || "").toLowerCase()
+    (c[COAUTHOR_COLUMN] || c[COAUTHOR_COLUMN.toLowerCase().replace(/ /g, "_")] || "").toLowerCase()
   );
   const stance = (c.nutrition_stance || "").toLowerCase();
   if (coauthor || stance.includes("keto-aligned")) return "CONTRACTED";

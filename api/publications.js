@@ -84,7 +84,7 @@ async function fetchRecentPubs(name, daysBack = 30) {
 // ── Gemini: generate check-in email ────────────────────────────────────
 
 async function generateCheckInEmail(kol, paperTitle, apiKey) {
-  const prompt = `Write a 2-3 sentence peer-to-peer email from a Medical Affairs Manager at Virta Health (nutrition-first T2D reversal) to ${kol.display_name} at ${kol.institution || "their institution"}. They just published: "${paperTitle}". The tone should be: genuine, collegial, brief. Not sales. Just acknowledging their work and leaving a door open. Sign off as Jared Potter, Medical Affairs, Virta Health.
+  const prompt = `Write a 2-3 sentence peer-to-peer email from a Medical Affairs Manager at [Company Name] (nutrition-first T2D reversal) to ${kol.display_name} at ${kol.institution || "their institution"}. They just published: "${paperTitle}". The tone should be: genuine, collegial, brief. Not sales. Just acknowledging their work and leaving a door open. Sign off as Jared Potter, Medical Affairs, [Company Name].
 
 Respond with ONLY valid JSON (no markdown):
 {"subject_line": "...", "email_body": "..."}`;
