@@ -30,3 +30,5 @@ venv/
 
 # Pipeline output — real KOL data stays local only
 data/
+.vercel
+CRED_SKILL.md

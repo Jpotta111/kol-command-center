@@ -9,7 +9,7 @@
  * OPS dimensions (0-20 each, 100 total):
  *   1. Institutional Credibility — from PubMed affiliation
  *   2. Clinical Relevance — weighted MeSH + text word matching
- *   3. Collaboration Signal — Virta CoAuthor > AMC+h > pharma
+ *   3. Collaboration Signal — CoAuthor flag > AMC+h > pharma
  *   4. Nutrition/Lifestyle Openness — keyword detection
  *   5. Strategic Reach — citations + h-index + AMC
  */
@@ -30,7 +30,7 @@ const CONFIG = {
 const OPENALEX_BASE = "https://api.openalex.org";
 const PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
-// ── MeSH term tiers (Virta-calibrated) ─────────────────────────────────
+// ── MeSH term tiers (tenant-calibrated — override via config) ─────────
 
 const MESH_PRIMARY = [
   "Diabetes Mellitus, Type 2", "Diet, Ketogenic",
@@ -312,15 +312,20 @@ function scoreClinicalRelevance(pubmedData) {
 
 // ── OPS Dimension 3: Collaboration Signal (0-20) ──────────────────────
 
+// Column name for the co-author flag in the uploaded HubSpot CSV.
+// Override by setting the COAUTHOR_COLUMN env var on the Vercel function,
+// or edit this constant in your fork.
+const COAUTHOR_COLUMN = process.env.COAUTHOR_COLUMN || "[coauthor_column_name]";
+
 function scoreCollaborationSignal(institution, hIndex, contact) {
   const coauthorFlag = (
-    contact["Virta Paper CoAuthor"] ||
-    contact["virta_paper_coauthor"] ||
-    contact["Virta Paper Coauthor"] || ""
+    contact[COAUTHOR_COLUMN] ||
+    contact[COAUTHOR_COLUMN.toLowerCase().replace(/ /g, "_")] ||
+    contact[COAUTHOR_COLUMN.replace(/CoAuthor/i, "Coauthor")] || ""
   ).toLowerCase();
 
   if (["true", "yes", "1"].includes(coauthorFlag)) {
-    return { score: 20, reason: "Virta Paper CoAuthor" };
+    return { score: 20, reason: COAUTHOR_COLUMN };
   }
   if ((hIndex || 0) > 30 && isTopAMC(institution)) {
     return { score: 14, reason: "Top AMC + high h-index" };
