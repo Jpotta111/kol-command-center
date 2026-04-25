@@ -32,3 +32,4 @@ venv/
 data/
 .vercel
 CRED_SKILL.md
+dashboard/.env.local
