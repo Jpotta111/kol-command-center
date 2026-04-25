@@ -1,4 +1,12 @@
 import { useState, useEffect } from "react";
+import {
+  SignedIn,
+  SignedOut,
+  SignIn,
+  useUser,
+  useClerk,
+  UserButton,
+} from "@clerk/clerk-react";
 import NetworkGraph from "./components/NetworkGraph";
 import KOLTable from "./components/KOLTable";
 import CSVImportExport from "./components/CSVImportExport";
@@ -40,6 +48,46 @@ function ModeBlocker({ message }) {
   );
 }
 
+const ALLOWED_EMAILS = [
+  "jaredwpotter@gmail.com",
+];
+
+function DomainGate({ children }) {
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const email = user?.primaryEmailAddress?.emailAddress || "";
+  const isAllowed = ALLOWED_EMAILS.includes(email.toLowerCase());
+
+  if (!isAllowed) {
+    return (
+      <div className="auth-screen">
+        <div className="auth-card">
+          <h1>Access Restricted</h1>
+          <p>You don't have access to this tool. Contact the administrator to request access.</p>
+          <p style={{ color: "#64748b", fontSize: "14px" }}>
+            Signed in as: {email}
+          </p>
+          <button
+            onClick={() => signOut()}
+            style={{
+              marginTop: "16px",
+              padding: "8px 24px",
+              background: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "6px",
+              cursor: "pointer",
+            }}
+          >
+            Sign Out
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return children;
+}
+
 export default function App() {
   const [tab, setTab] = useState("graph");
   const [kolMode, setKolMode] = useState("All");
@@ -69,9 +117,24 @@ export default function App() {
 
   if (!graphData) {
     return (
-      <div className="flex items-center justify-center h-screen bg-teal-light">
-        <p className="text-teal-primary text-lg">Loading KOL data...</p>
-      </div>
+      <>
+        <SignedOut>
+          <div className="auth-screen">
+            <div className="auth-card">
+              <h1>KOL Command Center</h1>
+              <p>Sign in to continue</p>
+              <SignIn routing="hash" />
+            </div>
+          </div>
+        </SignedOut>
+        <SignedIn>
+          <DomainGate>
+            <div className="flex items-center justify-center h-screen bg-teal-light">
+              <p className="text-teal-primary text-lg">Loading KOL data...</p>
+            </div>
+          </DomainGate>
+        </SignedIn>
+      </>
     );
   }
 
@@ -79,7 +142,19 @@ export default function App() {
   const isResearch = kolMode === "Research";
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <>
+      <SignedOut>
+        <div className="auth-screen">
+          <div className="auth-card">
+            <h1>KOL Command Center</h1>
+            <p>Sign in to continue</p>
+            <SignIn routing="hash" />
+          </div>
+        </div>
+      </SignedOut>
+      <SignedIn>
+        <DomainGate>
+          <div className="flex flex-col h-screen bg-gray-50">
       {/* Top nav */}
       <nav className="bg-teal-primary text-white px-6 py-3 flex items-center gap-6 shrink-0">
         <h1 className="text-lg font-bold tracking-tight mr-2">
@@ -130,6 +205,7 @@ export default function App() {
           >
             <GearIcon />
           </button>
+          <UserButton afterSignOutUrl="/" />
         </div>
       </nav>
 
@@ -203,6 +279,9 @@ export default function App() {
       </div>
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-    </div>
+          </div>
+        </DomainGate>
+      </SignedIn>
+    </>
   );
 }

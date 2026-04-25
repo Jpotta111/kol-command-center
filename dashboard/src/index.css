@@ -9,3 +9,29 @@
   --color-tier-c: #eab308;
   --color-tier-d: #9ca3af;
 }
+
+.auth-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0f172a;
+}
+.auth-card {
+  background: #1e293b;
+  border-radius: 12px;
+  padding: 48px;
+  text-align: center;
+  max-width: 480px;
+  width: 100%;
+}
+.auth-card h1 {
+  color: #f8fafc;
+  font-size: 24px;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.auth-card p {
+  color: #94a3b8;
+  margin-bottom: 24px;
+}
