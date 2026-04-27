@@ -13,6 +13,7 @@ import CSVImportExport from "./components/CSVImportExport";
 import CREDReview from "./components/CREDReview";
 import Publications from "./components/Publications";
 import Pipeline from "./components/Pipeline";
+import Prospecting from "./components/Prospecting";
 import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
@@ -22,6 +23,7 @@ const TABS = [
   { id: "csv", label: "CSV Import/Export" },
   { id: "pipeline", label: "Pipeline" },
   { id: "pubs", label: "Publications" },
+  { id: "prospecting", label: "Prospecting" },
   // CRED Review tab — hidden from public UI, available for
   // future password-protected access. Sprint 8b complete.
   // { id: "cred", label: "CRED Review" },
@@ -275,6 +277,7 @@ export default function App() {
             ? <ModeBlocker message="Publication monitoring is for Research KOLs. Switch to Research or All view." />
             : <Publications nodes={graphData.nodes} />
         )}
+        {tab === "prospecting" && <Prospecting />}
         {tab === "cred" && <CREDReview />}
       </div>
 
