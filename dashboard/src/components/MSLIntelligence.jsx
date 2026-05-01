@@ -418,6 +418,7 @@ export default function MSLIntelligence() {
   const [selectedContact, setSelectedContact] = useState(null);
   const [uploadError, setUploadError] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [uploadMode, setUploadMode] = useState("json");
   const fileInputRef = useRef(null);
 
   // ── CSV Upload ──────────────────────────────────────────────────────
@@ -599,43 +600,72 @@ export default function MSLIntelligence() {
 
   // ── Phase: Upload ───────────────────────────────────────────────────
 
+  function ingestJSON(text) {
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      setUploadError("Invalid JSON — make sure this is output from msl_expand.py");
+      return;
+    }
+    if (!parsed.seeds || !parsed.prospects) {
+      setUploadError("Invalid format — expected { seeds, prospects, edges }");
+      return;
+    }
+    setEnrichedSeeds(parsed.seeds || []);
+    setProspects(parsed.prospects || []);
+    setEdges(parsed.edges || []);
+    setUploadError("");
+    setPhase("results");
+  }
+
   if (phase === "upload") {
     return (
       <div className="h-full flex items-center justify-center p-6 bg-gray-50">
         <div className="w-full max-w-2xl space-y-4">
-          <div
-            className={`rounded-lg border-2 border-dashed p-12 text-center transition-colors ${
-              isDragging ? "border-teal-primary bg-teal-light/40" : "border-gray-300 bg-white"
-            }`}
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFile(e.dataTransfer.files?.[0]); }}
-          >
-            <div className="text-5xl mb-3">🎥</div>
-            <h2 className="text-lg font-semibold text-gray-800 mb-1">MSL Intelligence</h2>
-            <p className="text-sm text-gray-600 mb-2">
-              Upload your MSL HubSpot contact list to map their networks and surface net-new payer prospects
-            </p>
-            <p className="text-xs text-gray-400 mb-6">
-              Expects columns: Name, Email, Job Title, Company / Organization
-            </p>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="px-4 py-2 bg-teal-primary text-white text-sm font-medium rounded hover:bg-teal-dark transition-colors"
-            >
-              Choose CSV file
-            </button>
-            <p className="text-xs text-gray-500 mt-2">or drag & drop a file here</p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".csv,text/csv"
-              className="hidden"
-              onChange={(e) => handleFile(e.target.files?.[0])}
-            />
-            {uploadError && <p className="mt-4 text-sm text-red-600 font-medium">{uploadError}</p>}
+          <div className="flex justify-center">
+            <div className="flex bg-gray-200 rounded-lg p-1 gap-1">
+              {[["json","Load Results JSON"],["csv","Upload CSV (Live)"]].map(([v,l]) => (
+                <button key={v} onClick={() => { setUploadMode(v); setUploadError(""); setSeeds([]); }}
+                  className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${uploadMode===v?"bg-white text-gray-900 shadow-sm":"text-gray-500 hover:text-gray-700"}`}
+                >{l}</button>
+              ))}
+            </div>
           </div>
+
+          {uploadMode === "json" && (
+            <div className={`rounded-lg border-2 border-dashed p-12 text-center transition-colors ${isDragging?"border-teal-primary bg-teal-light/40":"border-gray-300 bg-white"}`}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); const f=e.dataTransfer.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=(ev)=>ingestJSON(ev.target.result); r.readAsText(f); }}>
+              <div className="text-5xl mb-3">📊</div>
+              <h2 className="text-lg font-semibold text-gray-800 mb-1">Load MSL Results</h2>
+              <p className="text-sm text-gray-600 mb-2">Upload the JSON output from your local pipeline run</p>
+              <code className="block text-xs bg-gray-100 text-gray-700 px-3 py-2 rounded mb-6 font-mono">python msl_expand.py --csv ~/Downloads/contacts.csv --out ~/Desktop/msl_results.json</code>
+              <button type="button" onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-teal-primary text-white text-sm font-medium rounded hover:bg-teal-dark transition-colors">Choose JSON file</button>
+              <p className="text-xs text-gray-500 mt-2">or drag & drop a file here</p>
+              <input ref={fileInputRef} type="file" accept=".json,application/json" className="hidden"
+                onChange={(e) => { const f=e.target.files?.[0]; if(!f) return; const r=new FileReader(); r.onload=(ev)=>ingestJSON(ev.target.result); r.readAsText(f); }} />
+              {uploadError && <p className="mt-4 text-sm text-red-600 font-medium">{uploadError}</p>}
+            </div>
+          )}
+
+          {uploadMode === "csv" && (
+            <div className={`rounded-lg border-2 border-dashed p-12 text-center transition-colors ${isDragging?"border-teal-primary bg-teal-light/40":"border-gray-300 bg-white"}`}
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => { e.preventDefault(); setIsDragging(false); handleFile(e.dataTransfer.files?.[0]); }}>
+              <div className="text-5xl mb-3">🏥</div>
+              <h2 className="text-lg font-semibold text-gray-800 mb-1">MSL Intelligence</h2>
+              <p className="text-sm text-gray-600 mb-2">Upload your MSL HubSpot contact list to map their networks</p>
+              <p className="text-xs text-gray-400 mb-6">Expects columns: Name, Email, Job Title, Company / Organization</p>
+              <button type="button" onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-teal-primary text-white text-sm font-medium rounded hover:bg-teal-dark transition-colors">Choose CSV file</button>
+              <p className="text-xs text-gray-500 mt-2">or drag & drop a file here</p>
+              <input ref={fileInputRef} type="file" accept=".csv,text/csv" className="hidden"
+                onChange={(e) => handleFile(e.target.files?.[0])} />
+              {uploadError && <p className="mt-4 text-sm text-red-600 font-medium">{uploadError}</p>}
+            </div>
+          )}
 
           {seeds.length > 0 && (
             <div className="bg-white border border-gray-200 rounded-lg p-5">
