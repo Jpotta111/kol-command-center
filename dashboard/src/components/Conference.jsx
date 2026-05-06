@@ -47,6 +47,10 @@ export default function Conference({ existingKols = [] }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
+  const [historicalLoading, setHistoricalLoading] = useState(false);
+  const [historicalError, setHistoricalError] = useState(null);
+  const [historicalResult, setHistoricalResult] = useState(null);
+  const [historicalSort, setHistoricalSort] = useState("priority_score");
 
   const kolsForScan = uploadedKols || existingKols;
 
@@ -103,6 +107,50 @@ export default function Conference({ existingKols = [] }) {
     }
   }, [form, kolsForScan]);
 
+  const mineHistorical = useCallback(async () => {
+    setHistoricalLoading(true);
+    setHistoricalError(null);
+    setHistoricalResult(null);
+
+    const currentYear = parseInt(form.year, 10) || new Date().getFullYear();
+    const startYear = currentYear - 4; // mine 4 prior years + current
+    const years = [];
+    for (let y = startYear; y <= currentYear; y++) years.push(y);
+
+    const keywords = form.presenter_keywords
+      .split(",").map((k) => k.trim()).filter(Boolean);
+
+    // Strip year suffix from conference name for cleaner search ("ISPOR 2026" -> "ISPOR")
+    const baseConfName = form.conference_name.replace(/\s*\d{4}\s*$/, "").trim();
+
+    const payload = {
+      conference_name: baseConfName,
+      years,
+      topic_keywords: keywords,
+      team_abstract_title: form.presenter_abstract,
+      team_abstract_keywords: keywords,
+      team_presenter_name: form.presenter_name,
+    };
+
+    try {
+      const resp = await fetch("/api/conference-historical", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...getApiHeaders() },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: resp.statusText }));
+        throw new Error(err.error || `Server error: ${resp.status}`);
+      }
+      const data = await resp.json();
+      setHistoricalResult(data);
+    } catch (err) {
+      setHistoricalError(err.message);
+    } finally {
+      setHistoricalLoading(false);
+    }
+  }, [form]);
+
   // ── Downloads ────────────────────────────────────────────────────────
 
   function downloadHTML(filename, html) {
@@ -145,6 +193,34 @@ export default function Conference({ existingKols = [] }) {
       `${form.conference_name.replace(/\s+/g, "_")}_team_briefing.html`,
       html,
     );
+  }
+
+  function downloadHistoricalCsv() {
+    if (!historicalResult?.presenters?.length) return;
+    const rows = historicalResult.presenters.map((p) => ({
+      name: p.full_name || "",
+      affiliation: p.affiliation || "",
+      linkedin_url: p.linkedin_url || "",
+      years_at_conference: (p.years_at_conference || []).join(", "),
+      presenting_current_year: p.presenting_current_year ? "yes" : "no",
+      session_current_year_title: p.current_year_session_title || "",
+      session_current_year_datetime: p.current_year_session_datetime || "",
+      topic_area: p.topic_area || "",
+      relevance_to_team_abstract: p.relevance_to_team_abstract || "",
+      recommended_action: p.recommended_action || "",
+      priority_score: p.priority_score ?? "",
+      notes: p.notes || "",
+    }));
+    const csv = Papa.unparse(rows);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safeName = (form.presenter_name || "presenter").replace(/[^A-Za-z0-9]+/g, "_");
+    const safeConf = form.conference_name.replace(/\s+/g, "_");
+    a.href = url;
+    a.download = `${safeName}_${safeConf}_historical_KOL_list.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   function downloadPersonalBriefing() {
@@ -218,7 +294,7 @@ export default function Conference({ existingKols = [] }) {
               )}
             </div>
           </div>
-          <div className="pt-2">
+          <div className="pt-2 flex flex-wrap gap-2">
             <button
               onClick={scan}
               disabled={loading}
@@ -233,6 +309,20 @@ export default function Conference({ existingKols = [] }) {
                 "Scan Conference"
               )}
             </button>
+            <button
+              onClick={mineHistorical}
+              disabled={historicalLoading}
+              className="bg-white border border-teal-primary text-teal-primary text-sm px-6 py-2 rounded hover:bg-teal-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {historicalLoading ? (
+                <span className="flex items-center gap-2">
+                  <span className="inline-block w-4 h-4 border-2 border-teal-primary border-t-transparent rounded-full animate-spin" />
+                  Mining historical abstracts (~60s)...
+                </span>
+              ) : (
+                "Mine Historical Abstracts (4 prior years)"
+              )}
+            </button>
           </div>
         </div>
 
@@ -240,6 +330,22 @@ export default function Conference({ existingKols = [] }) {
           <div className="bg-red-50 border border-red-200 rounded-lg p-3">
             <p className="text-sm text-red-700">{error}</p>
           </div>
+        )}
+
+        {historicalError && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <p className="text-sm text-red-700">Historical mining failed: {historicalError}</p>
+          </div>
+        )}
+
+        {historicalResult && (
+          <HistoricalPanel
+            result={historicalResult}
+            form={form}
+            sortField={historicalSort}
+            onSortChange={setHistoricalSort}
+            onDownloadCsv={downloadHistoricalCsv}
+          />
         )}
 
         {result && (
@@ -482,6 +588,127 @@ function PresenterCard({ presenter }) {
       )}
       <p className="text-[10px] text-gray-500 mt-1">→ {p.recommended_action}</p>
     </li>
+  );
+}
+
+function HistoricalPanel({ result, form, sortField, onSortChange, onDownloadCsv }) {
+  const { summary, presenters } = result;
+
+  const sorted = [...(presenters || [])].sort((a, b) => {
+    if (sortField === "priority_score") return (b.priority_score || 0) - (a.priority_score || 0);
+    if (sortField === "years_count") return (b.years_at_conference || []).length - (a.years_at_conference || []).length;
+    if (sortField === "presenting_now") return (b.presenting_current_year ? 1 : 0) - (a.presenting_current_year ? 1 : 0);
+    if (sortField === "name") return (a.full_name || "").localeCompare(b.full_name || "");
+    return 0;
+  });
+
+  const sortBtn = (key, label) => (
+    <button
+      onClick={() => onSortChange(key)}
+      className={`text-xs px-2 py-1 rounded ${
+        sortField === key ? "bg-teal-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+        <div className="flex flex-wrap gap-6 text-sm">
+          <Stat label="Unique presenters" value={summary.unique_presenters} color="text-purple-800" />
+          <Stat label={`Recurring (≥2 yrs)`} value={summary.recurring_presenters_2plus} color="text-purple-700" />
+          <Stat label={`Regulars (≥3 yrs)`} value={summary.regulars_3plus} color="text-purple-700" />
+          <Stat label={`Presenting ${summary.current_year}`} value={summary.presenting_current_year} color="text-teal-primary" />
+        </div>
+        <p className="text-xs text-gray-600 mt-2">
+          Mined {(summary.years_searched || []).join(", ")} · {summary.conference_name}
+        </p>
+        <div className="mt-3 pt-3 border-t border-purple-200 flex flex-wrap items-center gap-2">
+          <button
+            onClick={onDownloadCsv}
+            className="text-xs bg-teal-primary text-white px-3 py-1.5 rounded hover:bg-teal-dark"
+          >
+            Download {(form.presenter_name || "Presenter")}'s {form.conference_name.split(" ")[0]} KOL List (CSV)
+          </button>
+          <span className="text-xs text-gray-500 ml-2">Sort:</span>
+          {sortBtn("priority_score", "Priority")}
+          {sortBtn("years_count", "Years presented")}
+          {sortBtn("presenting_now", "Presenting now")}
+          {sortBtn("name", "Name")}
+        </div>
+      </div>
+
+      <div className="overflow-x-auto bg-white border border-gray-200 rounded-lg">
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="bg-gray-100 text-left">
+              <th className="px-2 py-1.5">Pri</th>
+              <th className="px-2 py-1.5">Name</th>
+              <th className="px-2 py-1.5">Affiliation</th>
+              <th className="px-2 py-1.5">Years</th>
+              <th className="px-2 py-1.5">{summary.current_year}?</th>
+              <th className="px-2 py-1.5">Topic</th>
+              <th className="px-2 py-1.5">Relevance</th>
+              <th className="px-2 py-1.5">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((p, i) => (
+              <tr key={i} className="border-b border-gray-100 hover:bg-gray-50 align-top">
+                <td className="px-2 py-1.5">
+                  <PriorityBadge score={p.priority_score} />
+                </td>
+                <td className="px-2 py-1.5 font-medium text-gray-900">
+                  {p.linkedin_url
+                    ? <a href={p.linkedin_url} target="_blank" rel="noreferrer" className="hover:underline">{p.full_name}</a>
+                    : p.full_name}
+                </td>
+                <td className="px-2 py-1.5 text-gray-600">{p.affiliation}</td>
+                <td className="px-2 py-1.5 text-gray-700 whitespace-nowrap">
+                  {(p.years_at_conference || []).join(", ")}
+                </td>
+                <td className="px-2 py-1.5">
+                  {p.presenting_current_year ? (
+                    <span className="text-[10px] font-bold text-teal-primary">YES</span>
+                  ) : (
+                    <span className="text-[10px] text-gray-400">no</span>
+                  )}
+                  {p.current_year_session_title && (
+                    <div className="text-[10px] text-gray-500 italic mt-0.5">
+                      {p.current_year_session_title}
+                    </div>
+                  )}
+                </td>
+                <td className="px-2 py-1.5 text-gray-600">{p.topic_area}</td>
+                <td className="px-2 py-1.5 text-gray-700">{p.relevance_to_team_abstract}</td>
+                <td className="px-2 py-1.5 text-gray-600 whitespace-nowrap">{p.recommended_action}</td>
+              </tr>
+            ))}
+            {!sorted.length && (
+              <tr><td colSpan="8" className="px-2 py-4 text-center text-gray-400">
+                No presenters found in the historical archive.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function PriorityBadge({ score }) {
+  const s = score || 0;
+  const cls = s >= 9 ? "bg-red-100 text-red-800"
+    : s >= 7 ? "bg-orange-100 text-orange-800"
+    : s >= 5 ? "bg-amber-100 text-amber-800"
+    : s >= 3 ? "bg-blue-50 text-blue-700"
+    : "bg-gray-100 text-gray-600";
+  return (
+    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${cls}`}>
+      {s}
+    </span>
   );
 }
 
