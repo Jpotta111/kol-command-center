@@ -15,6 +15,7 @@ import Publications from "./components/Publications";
 import Pipeline from "./components/Pipeline";
 import Prospecting from "./components/Prospecting";
 import MSLIntelligence from "./components/MSLIntelligence";
+import Conference from "./components/Conference";
 import SettingsModal from "./components/SettingsModal";
 import { sampleGraph, sampleProfiles } from "./sample_data";
 
@@ -26,6 +27,7 @@ const TABS = [
   { id: "pubs", label: "Publications" },
   { id: "prospecting", label: "Prospecting" },
   { id: "msl", label: "MSL Intelligence" },
+  { id: "conference", label: "Conference" },
   // CRED Review tab — hidden from public UI, available for
   // future password-protected access. Sprint 8b complete.
   // { id: "cred", label: "CRED Review" },
@@ -281,6 +283,9 @@ export default function App() {
         )}
         {tab === "prospecting" && <Prospecting />}
         {tab === "msl" && <MSLIntelligence />}
+        {tab === "conference" && (
+          <Conference existingKols={pipelineContacts || graphData.nodes} />
+        )}
         {tab === "cred" && <CREDReview />}
       </div>
 
