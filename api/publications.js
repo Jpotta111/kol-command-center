@@ -15,6 +15,23 @@ const GEMINI_MODEL = "gemini-2.5-flash";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Skip outreach to Virta-internal staff and existing paper coauthors.
+// The frontend may send the explicit flags from enrichment, or we
+// derive them here as a fallback.
+function isExcludedFromOutreach(kol) {
+  const flag = (kol.exclude_from_outreach ?? "").toString().toLowerCase();
+  if (["true", "yes", "1"].includes(flag)) return true;
+  const relType = (kol.kol_relationship_type || "").toString().toLowerCase();
+  if (relType === "virta_internal" || relType === "existing_collaborator") return true;
+  const coauthor = (kol.virta_paper_coauthor || kol["Virta Paper CoAuthor"] || "")
+    .toString().toLowerCase();
+  if (["true", "yes", "1"].includes(coauthor)) return true;
+  const email = (kol.email || "").toLowerCase();
+  const domain = email.split("@")[1] || "";
+  if (domain.includes("virta")) return true;
+  return false;
+}
+
 function formatDate(d) {
   return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -84,7 +101,7 @@ async function fetchRecentPubs(name, daysBack = 30) {
 // ── Gemini: generate check-in email ────────────────────────────────────
 
 async function generateCheckInEmail(kol, paperTitle, apiKey) {
-  const prompt = `Write a 2-3 sentence peer-to-peer email from a Medical Affairs Manager at [Company Name] (nutrition-first T2D reversal) to ${kol.display_name} at ${kol.institution || "their institution"}. They just published: "${paperTitle}". The tone should be: genuine, collegial, brief. Not sales. Just acknowledging their work and leaving a door open. Sign off as Jared Potter, Medical Affairs, [Company Name].
+  const prompt = `Write a 2-3 sentence peer-to-peer email from a Medical Affairs Manager at Virta Health (nutrition-first T2D reversal) to ${kol.display_name} at ${kol.institution || "their institution"}. They just published: "${paperTitle}". The tone should be: genuine, collegial, brief. Not sales. Just acknowledging their work and leaving a door open. Sign off as Jared Potter, Medical Affairs, Virta Health.
 
 Respond with ONLY valid JSON (no markdown):
 {"subject_line": "...", "email_body": "..."}`;
@@ -159,6 +176,7 @@ export default async function handler(req, res) {
     for (const kol of kols) {
       const name = kol.display_name || "";
       if (!name) continue;
+      if (isExcludedFromOutreach(kol)) continue;
 
       const papers = await fetchRecentPubs(name);
       await sleep(400);

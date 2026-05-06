@@ -24,9 +24,13 @@ export default function Publications({ nodes }) {
     try {
       const kolPayload = nodes.map((n) => ({
         display_name: n.display_name || "",
-        email: n.email || "",
+        email: n.email || n.Email || "",
         kol_tier: n.kol_tier || n.tier || "",
         institution: n.institution || "",
+        kol_relationship_type: n.kol_relationship_type || "",
+        exclude_from_outreach: n.exclude_from_outreach || "",
+        virta_paper_coauthor:
+          n["Virta Paper CoAuthor"] || n.virta_paper_coauthor || "",
       }));
 
       const resp = await fetch("/api/publications", {

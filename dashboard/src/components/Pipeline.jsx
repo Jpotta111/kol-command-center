@@ -25,21 +25,34 @@ function detectAreas(contact) {
     .map(([area]) => area);
 }
 
+// ── Relationship classification ────────────────────────────────────────
+
+function deriveRelationship(c) {
+  const explicit = (c.kol_relationship_type || "").toString().toLowerCase();
+  if (explicit) return explicit;
+  const email = (c.email || c.Email || "").toString().toLowerCase();
+  const domain = email.split("@")[1] || "";
+  if (domain.includes("virta")) return "virta_internal";
+  const coauthor = ["true", "yes", "1"].includes(
+    (c["Virta Paper CoAuthor"] || c.virta_paper_coauthor || "").toString().toLowerCase()
+  );
+  if (coauthor) return "existing_collaborator";
+  return "prospect";
+}
+
 // ── Pipeline stage classification ──────────────────────────────────────
 
-// Column name for the co-author flag — override in your fork to match your HubSpot CSV.
-const COAUTHOR_COLUMN = "[coauthor_column_name]";
-
 function classifyStage(c) {
-  const coauthor = ["true", "yes", "1"].includes(
-    (c[COAUTHOR_COLUMN] || c[COAUTHOR_COLUMN.toLowerCase().replace(/ /g, "_")] || "").toLowerCase()
-  );
+  const rel = deriveRelationship(c);
+  if (rel === "virta_internal") return null; // hidden from all views
+  if (rel === "existing_collaborator") return "COLLABORATORS";
+
   const stance = (c.nutrition_stance || "").toLowerCase();
-  if (coauthor || stance.includes("keto-aligned")) return "CONTRACTED";
+  if (stance.includes("keto-aligned")) return "CONTRACTED";
 
   const tier = c.kol_tier || c["MA_OPS Tier"] || c.ma_ops_tier || "";
   const isAB = ["A", "B"].includes(tier);
-  if (!isAB) return null; // Only A/B in pipeline
+  if (!isAB) return null; // Only A/B in prospect pipeline
 
   const lastContact = c["Last Activity Date"] || c.last_contacted || c.last_contact_date || "";
   const response = c.response || c.response_recorded || "";
@@ -51,8 +64,9 @@ function classifyStage(c) {
 
 // ── Component ──────────────────────────────────────────────────────────
 
-const STAGES = ["CONTRACTED", "ENGAGED", "ACTIVE OUTREACH", "PROSPECTS"];
+const STAGES = ["COLLABORATORS", "CONTRACTED", "ENGAGED", "ACTIVE OUTREACH", "PROSPECTS"];
 const STAGE_COLORS = {
+  COLLABORATORS: { bg: "bg-teal-50", border: "border-teal-300", header: "bg-teal-primary" },
   CONTRACTED: { bg: "bg-green-50", border: "border-green-300", header: "bg-green-600" },
   ENGAGED: { bg: "bg-blue-50", border: "border-blue-300", header: "bg-blue-600" },
   "ACTIVE OUTREACH": { bg: "bg-yellow-50", border: "border-yellow-300", header: "bg-yellow-600" },
@@ -92,10 +106,16 @@ export default function Pipeline({ contacts: externalContacts, uploadDate: exter
   const { staged, stats } = useMemo(() => {
     if (!contacts?.length) return { staged: {}, stats: {} };
 
-    const staged = { CONTRACTED: [], ENGAGED: [], "ACTIVE OUTREACH": [], PROSPECTS: [] };
-    let tierA = 0, tierB = 0, contracted = 0, outreach = 0, totalOps = 0, opsCount = 0;
+    const staged = {
+      COLLABORATORS: [], CONTRACTED: [],
+      ENGAGED: [], "ACTIVE OUTREACH": [], PROSPECTS: [],
+    };
+    let tierA = 0, tierB = 0, collaborators = 0, outreach = 0, totalOps = 0, opsCount = 0;
 
     for (const c of contacts) {
+      // virta_internal contacts hidden from all pipeline views
+      if (deriveRelationship(c) === "virta_internal") continue;
+
       const tier = c.kol_tier || c["MA_OPS Tier"] || c.ma_ops_tier || "";
       if (tier === "A") tierA++;
       if (tier === "B") tierB++;
@@ -103,7 +123,7 @@ export default function Pipeline({ contacts: externalContacts, uploadDate: exter
       if (!isNaN(ops)) { totalOps += ops; opsCount++; }
 
       const stage = classifyStage(c);
-      if (stage === "CONTRACTED") contracted++;
+      if (stage === "COLLABORATORS") collaborators++;
       if (stage === "ACTIVE OUTREACH") outreach++;
       if (stage && staged[stage]) {
         staged[stage].push({ ...c, _tier: tier, _stage: stage, _areas: detectAreas(c) });
@@ -114,7 +134,7 @@ export default function Pipeline({ contacts: externalContacts, uploadDate: exter
       staged,
       stats: {
         total: contacts.length,
-        tierA, tierB, contracted, outreach,
+        tierA, tierB, collaborators, outreach,
         avgOps: opsCount ? Math.round(totalOps / opsCount * 10) / 10 : 0,
         pipelineTotal: Object.values(staged).reduce((s, arr) => s + arr.length, 0),
       },
@@ -125,15 +145,19 @@ export default function Pipeline({ contacts: externalContacts, uploadDate: exter
   const coverage = useMemo(() => {
     if (!contacts?.length) return [];
     const areas = Object.keys(AREA_KEYWORDS);
+    const visible = (contacts || []).filter(
+      (c) => deriveRelationship(c) !== "virta_internal"
+    );
     return areas.map((area) => {
-      const inArea = (contacts || []).filter((c) => {
+      const inArea = visible.filter((c) => {
         const text = [c.institution, c.company, c.Company, c.top_paper_title,
           c.collaboration_reason, c.nutrition_signal_keywords].filter(Boolean).join(" ").toLowerCase();
         return AREA_KEYWORDS[area].some((k) => text.includes(k));
       });
       const tierAContracted = inArea.filter((c) => {
         const tier = c.kol_tier || c["MA_OPS Tier"] || "";
-        return tier === "A" && classifyStage(c) === "CONTRACTED";
+        const stage = classifyStage(c);
+        return tier === "A" && (stage === "CONTRACTED" || stage === "COLLABORATORS");
       }).length;
       const tierAActive = inArea.filter((c) => {
         const tier = c.kol_tier || c["MA_OPS Tier"] || "";
@@ -187,7 +211,7 @@ export default function Pipeline({ contacts: externalContacts, uploadDate: exter
         <div><span className="text-gray-500">Total KOLs:</span> <span className="font-bold text-gray-900">{stats.total}</span></div>
         <div><span className="text-gray-500">Tier A:</span> <span className="font-bold text-green-700">{stats.tierA}</span></div>
         <div><span className="text-gray-500">Tier B:</span> <span className="font-bold text-blue-700">{stats.tierB}</span></div>
-        <div><span className="text-gray-500">Contracted:</span> <span className="font-bold text-teal-primary">{stats.contracted}</span></div>
+        <div><span className="text-gray-500">Collaborators:</span> <span className="font-bold text-teal-primary">{stats.collaborators}</span></div>
         <div><span className="text-gray-500">Active Outreach:</span> <span className="font-bold text-yellow-700">{stats.outreach}</span></div>
         <div><span className="text-gray-500">Avg OPS:</span> <span className="font-bold text-gray-900">{stats.avgOps}</span></div>
         <div className="ml-auto flex items-center gap-3">
