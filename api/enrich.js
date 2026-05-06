@@ -9,7 +9,7 @@
  * OPS dimensions (0-20 each, 100 total):
  *   1. Institutional Credibility — from PubMed affiliation
  *   2. Clinical Relevance — weighted MeSH + text word matching
- *   3. Collaboration Signal — CoAuthor flag > AMC+h > pharma
+ *   3. Collaboration Signal — Virta CoAuthor > AMC+h > pharma
  *   4. Nutrition/Lifestyle Openness — keyword detection
  *   5. Strategic Reach — citations + h-index + AMC
  */
@@ -30,7 +30,7 @@ const CONFIG = {
 const OPENALEX_BASE = "https://api.openalex.org";
 const PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
 
-// ── MeSH term tiers (tenant-calibrated — override via config) ─────────
+// ── MeSH term tiers (Virta-calibrated) ─────────────────────────────────
 
 const MESH_PRIMARY = [
   "Diabetes Mellitus, Type 2", "Diet, Ketogenic",
@@ -118,6 +118,38 @@ async function pubmedSearch(query, retmax = 50) {
     count: parseInt(result.count || "0", 10),
     idlist: result.idlist || [],
   };
+}
+
+// PubMed MeSH-overlap disambiguation query — narrows author search to
+// papers in Virta's therapeutic area. Used to rank OpenAlex candidates
+// when multiple authors share a name.
+const MESH_DISAMBIG_QUERY =
+  '("Diet, Ketogenic"[MeSH] OR "Diet, Carbohydrate-Restricted"[MeSH] OR ' +
+  '"Diabetes Mellitus, Type 2"[MeSH] OR "Insulin Resistance"[MeSH] OR ' +
+  '"Obesity"[MeSH] OR "ketogenic"[TIAB] OR "low carbohydrate"[TIAB] OR ' +
+  '"carbohydrate restriction"[TIAB])';
+
+async function meshOverlapCount(name) {
+  if (!name) return 0;
+  try {
+    const result = await pubmedSearch(`${name}[Author] AND ${MESH_DISAMBIG_QUERY}`, 0);
+    return result.count;
+  } catch {
+    return 0;
+  }
+}
+
+// Remove email addresses from an institution/affiliation string and
+// tidy up the leftover punctuation.
+function stripEmail(s) {
+  if (!s) return s;
+  return String(s)
+    .replace(/[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}/g, "")
+    .replace(/\.\s*Electronic address:\s*/gi, ". ")
+    .replace(/\s+,/g, ",")
+    .replace(/\s{2,}/g, " ")
+    .replace(/[\s,;.]+$/, "")
+    .trim();
 }
 
 async function pubmedFetchXml(pmids) {
@@ -312,20 +344,15 @@ function scoreClinicalRelevance(pubmedData) {
 
 // ── OPS Dimension 3: Collaboration Signal (0-20) ──────────────────────
 
-// Column name for the co-author flag in the uploaded HubSpot CSV.
-// Override by setting the COAUTHOR_COLUMN env var on the Vercel function,
-// or edit this constant in your fork.
-const COAUTHOR_COLUMN = process.env.COAUTHOR_COLUMN || "[coauthor_column_name]";
-
 function scoreCollaborationSignal(institution, hIndex, contact) {
   const coauthorFlag = (
-    contact[COAUTHOR_COLUMN] ||
-    contact[COAUTHOR_COLUMN.toLowerCase().replace(/ /g, "_")] ||
-    contact[COAUTHOR_COLUMN.replace(/CoAuthor/i, "Coauthor")] || ""
+    contact["Virta Paper CoAuthor"] ||
+    contact["virta_paper_coauthor"] ||
+    contact["Virta Paper Coauthor"] || ""
   ).toLowerCase();
 
   if (["true", "yes", "1"].includes(coauthorFlag)) {
-    return { score: 20, reason: COAUTHOR_COLUMN };
+    return { score: 20, reason: "Virta Paper CoAuthor" };
   }
   if ((hIndex || 0) > 30 && isTopAMC(institution)) {
     return { score: 14, reason: "Top AMC + high h-index" };
@@ -390,14 +417,55 @@ function computeTier(score) {
 
 // ── OpenAlex: h-index + citations only ─────────────────────────────────
 
-async function fetchOpenAlexMetrics(name, institution, email) {
-  const params = new URLSearchParams({
-    search: name, per_page: "5",
-    select: "id,display_name,orcid,last_known_institutions,summary_stats,cited_by_count,works_count,topics,x_concepts",
-    mailto: email,
-  });
+// Domain keywords derived from target therapeutic area — used to
+// disambiguate common names by penalizing candidates outside our field.
+const DOMAIN_RELEVANCE_KEYWORDS = [
+  "diabetes", "ketogenic", "insulin", "metabolic", "obesity",
+  "nutrition", "diet", "carbohydrate", "glycemic", "lipid",
+  "cardiovascular", "endocrin", "fatty liver", "weight",
+  "kinesiology", "exercise physiol", "food", "glucose",
+  "hepat", "steatotic", "steatohepatitis", "pancrea",
+];
+
+function buildAuthorResult(raw) {
+  const topics = raw.topics || raw.x_concepts || [];
+  return {
+    openalex_id: raw.id || "",
+    display_name: raw.display_name || "",
+    orcid: raw.orcid || null,
+    h_index: (raw.summary_stats || {}).h_index || 0,
+    citation_count: raw.cited_by_count || 0,
+    pub_count: raw.works_count || 0,
+    concepts: topics.map((c) => ({
+      id: c.id || "", display_name: c.display_name || "", score: c.score || 0,
+    })),
+  };
+}
+
+async function fetchOpenAlexMetrics(name, institution, email, orcid) {
+  const OA_SELECT = "id,display_name,orcid,last_known_institutions,summary_stats,cited_by_count,works_count,topics,x_concepts";
 
   try {
+    // ── ORCID-first: exact match, no disambiguation needed ──────────
+    if (orcid) {
+      const orcidClean = orcid.replace(/^https?:\/\/orcid\.org\//, "").trim();
+      if (orcidClean) {
+        const params = new URLSearchParams({
+          filter: `orcid:${orcidClean}`, select: OA_SELECT, mailto: email,
+        });
+        const resp = await fetch(`${OPENALEX_BASE}/authors?${params}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if ((data.results || []).length > 0) return buildAuthorResult(data.results[0]);
+        }
+      }
+    }
+
+    // ── Fallback: name-based search with disambiguation ─────────────
+    const params = new URLSearchParams({
+      search: name, per_page: "5", select: OA_SELECT, mailto: email,
+    });
+
     const resp = await fetch(`${OPENALEX_BASE}/authors?${params}`);
     if (!resp.ok) return null;
     const data = await resp.json();
@@ -407,6 +475,54 @@ async function fetchOpenAlexMetrics(name, institution, email) {
     const queryName = name.trim().toLowerCase();
     const queryInst = (institution || "").trim().toLowerCase();
     const queryTokens = new Set(queryName.split(/\s+/));
+
+    // ── Pass 1: MeSH-overlap disambiguation ─────────────────────────
+    // For each candidate, count their PubMed papers that overlap with
+    // Virta's MeSH terms. Pick the candidate with the highest overlap.
+    // This surfaces clinical nutrition specialists over basic-science
+    // namesakes who happen to be more prolific overall.
+    const meshScored = [];
+    for (const raw of results) {
+      const candName = (raw.display_name || "").trim();
+      if (!candName) continue;
+      // Require at least minimal name-token overlap with the query so
+      // we don't pick an unrelated person who happens to publish in our area.
+      const candTokens = new Set(candName.toLowerCase().split(/\s+/));
+      let overlap = 0;
+      for (const t of queryTokens) { if (candTokens.has(t)) overlap++; }
+      const nameOverlap = overlap / Math.max(queryTokens.size, candTokens.size);
+      if (nameOverlap < 0.5) continue;
+      const meshCount = await meshOverlapCount(candName);
+      await sleep(400);
+      meshScored.push({ raw, meshCount });
+    }
+
+    const maxMesh = meshScored.reduce((m, c) => Math.max(m, c.meshCount), 0);
+    if (maxMesh > 0) {
+      // Tie-break by citation count
+      const winners = meshScored
+        .filter((c) => c.meshCount === maxMesh)
+        .sort((a, b) => (b.raw.cited_by_count || 0) - (a.raw.cited_by_count || 0));
+      return buildAuthorResult(winners[0].raw);
+    }
+
+    // ── Pass 2: prolific-author fallback ────────────────────────────
+    // No candidate has any MeSH-relevant publications. Fall back to
+    // citation-based selection with name + institution + domain signals.
+    const sorted = [...results].sort(
+      (a, b) => (b.cited_by_count || 0) - (a.cited_by_count || 0)
+    );
+
+    for (const raw of sorted) {
+      if ((raw.cited_by_count || 0) <= 5000) break;
+      const candName = (raw.display_name || "").trim().toLowerCase();
+      const candTokens = new Set(candName.split(/\s+/));
+      if (!candTokens.size) continue;
+      let overlap = 0;
+      for (const t of queryTokens) { if (candTokens.has(t)) overlap++; }
+      const nameOverlap = overlap / Math.max(queryTokens.size, candTokens.size);
+      if (nameOverlap >= 0.5) return buildAuthorResult(raw);
+    }
 
     let bestMatch = null;
     let bestScore = 0;
@@ -430,24 +546,25 @@ async function fetchOpenAlexMetrics(name, institution, email) {
         }
       }
 
-      const confidence = Math.min(1.0, nameScore + instBoost);
+      let domainPenalty = 0;
+      const topConcepts = (raw.topics || raw.x_concepts || []).slice(0, 3);
+      if (topConcepts.length > 0) {
+        const conceptText = topConcepts
+          .map((c) => (c.display_name || "").toLowerCase())
+          .join(" ");
+        const hasDomainOverlap = DOMAIN_RELEVANCE_KEYWORDS.some((kw) =>
+          conceptText.includes(kw)
+        );
+        if (!hasDomainOverlap) domainPenalty = 0.3;
+      }
+
+      const confidence = Math.min(1.0, nameScore + instBoost) - domainPenalty;
       if (confidence > bestScore) { bestScore = confidence; bestMatch = raw; }
     }
 
-    if (bestScore < 0.6 || !bestMatch) return null;
+    if (bestScore < 0.3 || !bestMatch) return null;
 
-    const topics = bestMatch.topics || bestMatch.x_concepts || [];
-    return {
-      openalex_id: bestMatch.id || "",
-      display_name: bestMatch.display_name || "",
-      orcid: bestMatch.orcid || null,
-      h_index: (bestMatch.summary_stats || {}).h_index || 0,
-      citation_count: bestMatch.cited_by_count || 0,
-      pub_count: bestMatch.works_count || 0,
-      concepts: topics.map((c) => ({
-        id: c.id || "", display_name: c.display_name || "", score: c.score || 0,
-      })),
-    };
+    return buildAuthorResult(bestMatch);
   } catch {
     return null;
   }
@@ -570,6 +687,7 @@ export default async function handler(req, res) {
     const outputColumns = [
       "hs_object_id", "openalex_match_status", "existing_kol_tier",
       "ops_score", "kol_tier",
+      "kol_relationship_type", "exclude_from_outreach",
       "institutional_credibility_score", "clinical_relevance_score",
       "collaboration_signal_score", "collaboration_reason",
       "nutrition_openness_score", "strategic_reach_score",
@@ -588,8 +706,9 @@ export default async function handler(req, res) {
       let name = contact.display_name || contact.Name || contact.name || "";
       if (!name) {
         const first = contact.firstname || contact["First Name"] || contact.first_name || "";
+        const middle = contact["Middle Name"] || contact["Middle Initial"] || contact.middle_name || "";
         const last = contact.lastname || contact["Last Name"] || contact.last_name || "";
-        name = `${first} ${last}`.trim();
+        name = middle ? `${first} ${middle} ${last}`.trim() : `${first} ${last}`.trim();
       }
 
       const csvInstitution = contact.institution || contact.Institution ||
@@ -597,8 +716,34 @@ export default async function handler(req, res) {
       const hsId = contact.hs_object_id || contact["Record ID"] || "";
       const existingTier = contact["MA_OPS Tier"] || contact["ma_ops_tier"] || "";
 
+      // Classify relationship type — gates outreach downstream.
+      const coauthorFlag = (
+        contact["Virta Paper CoAuthor"] ||
+        contact["virta_paper_coauthor"] ||
+        contact["Virta Paper Coauthor"] || ""
+      ).toString().toLowerCase();
+      const contactEmail = (
+        contact.Email || contact.email || contact["Email Address"] || ""
+      ).toString().toLowerCase();
+      const emailDomain = (contactEmail.split("@")[1] || "");
+
+      let relationshipType, excludeFromOutreach;
+      if (emailDomain.includes("virta")) {
+        relationshipType = "virta_internal";
+        excludeFromOutreach = true;
+      } else if (["true", "yes", "1"].includes(coauthorFlag)) {
+        relationshipType = "existing_collaborator";
+        excludeFromOutreach = true;
+      } else {
+        relationshipType = "prospect";
+        excludeFromOutreach = false;
+      }
+
       if (!name) {
-        enrichedRows.push(emptyRow(hsId, "skip_no_name", existingTier));
+        const empty = emptyRow(hsId, "skip_no_name", existingTier);
+        empty.kol_relationship_type = relationshipType;
+        empty.exclude_from_outreach = excludeFromOutreach;
+        enrichedRows.push(empty);
         notFound++; continue;
       }
 
@@ -607,18 +752,22 @@ export default async function handler(req, res) {
       await sleep(400);
 
       // Step 2: OpenAlex for h-index + citations (supplementary)
-      const oaMetrics = await fetchOpenAlexMetrics(name, csvInstitution, email);
+      const orcid = contact.ORCID || contact.orcid || contact["Orcid"] || "";
+      const oaMetrics = await fetchOpenAlexMetrics(name, csvInstitution, email, orcid);
       await sleep(100);
 
       if (!pubmed && !oaMetrics) {
-        enrichedRows.push(emptyRow(hsId, "not_found", existingTier));
+        const empty = emptyRow(hsId, "not_found", existingTier);
+        empty.kol_relationship_type = relationshipType;
+        empty.exclude_from_outreach = excludeFromOutreach;
+        enrichedRows.push(empty);
         notFound++; continue;
       }
 
       // Institution resolution — priority stack
       let institution = "";
       let institutionSource = "";
-      const pubmedAffiliation = pubmed?.affiliation || "";
+      const pubmedAffiliation = stripEmail(pubmed?.affiliation || "");
 
       if (csvInstitution) {
         // PRIORITY 1: HubSpot CSV input (highest trust — human entered)
@@ -637,6 +786,7 @@ export default async function handler(req, res) {
         institution = pubmedAffiliation;
         institutionSource = "pubmed_recent";
       }
+      institution = stripEmail(institution);
       const hIndex = oaMetrics?.h_index || 0;
       const citationCount = oaMetrics?.citation_count || 0;
 
@@ -667,6 +817,8 @@ export default async function handler(req, res) {
         existing_kol_tier: existingTier,
         ops_score: composite,
         kol_tier: computeTier(composite),
+        kol_relationship_type: relationshipType,
+        exclude_from_outreach: excludeFromOutreach,
         institutional_credibility_score: instCred,
         clinical_relevance_score: clinRel,
         collaboration_signal_score: collab.score,
@@ -718,6 +870,7 @@ function emptyRow(hsId, status, existingTier) {
     hs_object_id: hsId, openalex_match_status: status,
     existing_kol_tier: existingTier || "",
     ops_score: "", kol_tier: "",
+    kol_relationship_type: "", exclude_from_outreach: "",
     institutional_credibility_score: "", clinical_relevance_score: "",
     collaboration_signal_score: "", collaboration_reason: "",
     nutrition_openness_score: "", strategic_reach_score: "",
